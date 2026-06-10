@@ -58,9 +58,9 @@ class ItemTypeFormDialog(QDialog):
         self.f_unit = field("VD: cái, bộ, chiếc, hộp")
 
         self.f_lifespan = QSpinBox()
-        self.f_lifespan.setRange(1, 600)
-        self.f_lifespan.setValue(12)
-        self.f_lifespan.setSuffix(" tháng")
+        self.f_lifespan.setRange(1, 50)
+        self.f_lifespan.setValue(1)
+        self.f_lifespan.setSuffix(" năm")
         self.f_lifespan.setFont(QFont(FONT, 12))
         self.f_lifespan.setFixedHeight(36)
         self.f_lifespan.setStyleSheet("""
@@ -87,7 +87,7 @@ class ItemTypeFormDialog(QDialog):
         form.addRow(lbl("Mã Hàng *"), self.f_code)
         form.addRow(lbl("Tên Hàng *"), self.f_name)
         form.addRow(lbl("Đơn Vị Tính *"), self.f_unit)
-        form.addRow(lbl("Niên Hạn Tổng *"), self.f_lifespan)
+        form.addRow(lbl("Niên Hạn (năm) *"), self.f_lifespan)
         form.addRow(lbl("Ghi Chú"), self.f_notes)
         root.addLayout(form)
 
@@ -95,7 +95,7 @@ class ItemTypeFormDialog(QDialog):
             self.f_code.setText(item.code)
             self.f_name.setText(item.name)
             self.f_unit.setText(item.unit_of_measure)
-            self.f_lifespan.setValue(item.total_lifespan_months)
+            self.f_lifespan.setValue(max(1, round(item.total_lifespan_months / 12)))
             self.f_notes.setPlainText(item.notes)
 
         root.addSpacing(24)
@@ -142,7 +142,7 @@ class ItemTypeFormDialog(QDialog):
         code = self.f_code.text().strip()
         name = self.f_name.text().strip()
         unit = self.f_unit.text().strip()
-        lifespan = self.f_lifespan.value()
+        lifespan = self.f_lifespan.value() * 12  # convert years → months for storage
         notes = self.f_notes.toPlainText().strip()
 
         if not code:

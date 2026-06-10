@@ -39,8 +39,16 @@ class NavItem(QWidget):
         self._refresh()
 
     def _refresh(self):
-        bg = "#efefef" if self._active else "transparent"
-        self.setStyleSheet(f"NavItem {{ background: {bg}; border-radius: 8px; }}")
+        if self._active:
+            self.setStyleSheet("""
+                NavItem { background: #111; border-radius: 8px; }
+                NavItem QLabel { color: white; }
+            """)
+        else:
+            self.setStyleSheet("""
+                NavItem { background: transparent; border-radius: 8px; }
+                NavItem QLabel { color: #1a1a1a; }
+            """)
 
     def set_active(self, v: bool):
         self._active = v
@@ -51,7 +59,10 @@ class NavItem(QWidget):
 
     def enterEvent(self, e):
         if not self._active:
-            self.setStyleSheet("NavItem { background: #f7f7f7; border-radius: 8px; }")
+            self.setStyleSheet("""
+                NavItem { background: #f0f0f0; border-radius: 8px; }
+                NavItem QLabel { color: #1a1a1a; }
+            """)
 
     def leaveEvent(self, e):
         self._refresh()

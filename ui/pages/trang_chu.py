@@ -114,13 +114,10 @@ class DotsButton(QPushButton):
 
 # ── Bảng Kho / Đơn Vị ────────────────────────────────────────────────────────
 class KhoTable(QTableWidget):
-    COLS = ["STT", "Tên Kho", "Mã Kho", "Loại", "Địa Chỉ", "Ghi Chú", ""]
+    COLS = ["STT", "Tên Kho", "Mã Kho", "Loại", "Địa Chỉ", "Ghi Chú"]
 
-    def __init__(self, on_view, on_edit, on_delete):
+    def __init__(self):
         super().__init__(0, len(self.COLS))
-        self._on_view = on_view
-        self._on_edit = on_edit
-        self._on_delete = on_delete
         self.setHorizontalHeaderLabels(self.COLS)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
@@ -128,6 +125,8 @@ class KhoTable(QTableWidget):
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setStyleSheet(_TABLE_STYLE)
         h = self.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -136,11 +135,9 @@ class KhoTable(QTableWidget):
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 56)
         self.setColumnWidth(2, 100)
         self.setColumnWidth(3, 100)
-        self.setColumnWidth(6, 52)
 
     def load(self, warehouses: list[Warehouse]):
         self.setRowCount(0)
@@ -156,18 +153,14 @@ class KhoTable(QTableWidget):
                 if col == 0:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.setItem(r, col, item)
-            self.setCellWidget(r, 6, DotsButton(wh, self._on_view, self._on_edit, self._on_delete))
 
 
 # ── Bảng Hàng Hoá ─────────────────────────────────────────────────────────────
 class HangHoaTable(QTableWidget):
-    COLS = ["STT", "Tên Hàng", "Mã Hàng", "Đơn Vị Tính", "Niên Hạn (tháng)", "Ghi Chú", ""]
+    COLS = ["STT", "Tên Hàng", "Mã Hàng", "Đơn Vị Tính", "Niên Hạn (năm)", "Ghi Chú"]
 
-    def __init__(self, on_view, on_edit, on_delete):
+    def __init__(self):
         super().__init__(0, len(self.COLS))
-        self._on_view = on_view
-        self._on_edit = on_edit
-        self._on_delete = on_delete
         self.setHorizontalHeaderLabels(self.COLS)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
@@ -175,6 +168,8 @@ class HangHoaTable(QTableWidget):
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setStyleSheet(_TABLE_STYLE)
         h = self.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -183,12 +178,10 @@ class HangHoaTable(QTableWidget):
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 56)
         self.setColumnWidth(2, 110)
         self.setColumnWidth(3, 120)
-        self.setColumnWidth(4, 150)
-        self.setColumnWidth(6, 52)
+        self.setColumnWidth(4, 130)
 
     def load(self, items: list[ItemType]):
         self.setRowCount(0)
@@ -196,15 +189,16 @@ class HangHoaTable(QTableWidget):
             r = self.rowCount()
             self.insertRow(r)
             self.setRowHeight(r, 52)
+            months = it.total_lifespan_months
+            years_str = f"{months // 12}" if months % 12 == 0 else f"{months / 12:.1f}"
             cells = [str(i + 1), it.name, it.code,
-                     it.unit_of_measure, str(it.total_lifespan_months), it.notes]
+                     it.unit_of_measure, years_str, it.notes]
             for col, val in enumerate(cells):
                 cell = QTableWidgetItem(val)
                 cell.setFont(QFont(FONT, 12))
                 if col in (0, 4):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.setItem(r, col, cell)
-            self.setCellWidget(r, 6, DotsButton(it, self._on_view, self._on_edit, self._on_delete))
 
 
 # ── Trang Chủ ─────────────────────────────────────────────────────────────────
@@ -213,7 +207,7 @@ class TrangChuPage(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setStyleSheet("background: #fafafa;")
+        self.setStyleSheet("TrangChuPage { background: #fafafa; }")
         self._active_type = "TONG"   # "TONG" | "DON_VI" | "HANG_HOA"
         self._cache: list = []
 
@@ -289,18 +283,10 @@ class TrangChuPage(QWidget):
         root.addSpacing(12)
 
         # ── Tables (toggle visibility by tab) ────────────────────────────────
-        self.table = KhoTable(
-            on_view=self._view_warehouse,
-            on_edit=self._edit_warehouse,
-            on_delete=self._delete_warehouse,
-        )
+        self.table = KhoTable()
         root.addWidget(self.table)
 
-        self.item_table = HangHoaTable(
-            on_view=self._view_item,
-            on_edit=self._edit_item,
-            on_delete=self._delete_item,
-        )
+        self.item_table = HangHoaTable()
         self.item_table.setVisible(False)
         root.addWidget(self.item_table)
 
