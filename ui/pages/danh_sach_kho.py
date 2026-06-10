@@ -151,7 +151,6 @@ class KhoTable(QTableWidget):
 
 # ── Trang Danh Sách Kho ───────────────────────────────────────────────────────
 class DanhSachKhoPage(QWidget):
-    TABS = ["Kho", "Đơn Vị", "Hàng Hoá"]
 
     def __init__(self):
         super().__init__()

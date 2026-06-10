@@ -7,10 +7,10 @@ from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import QFont, QCursor, QAction
 from ui.dialogs.warehouse_form import WarehouseFormDialog
 from database.warehouses import Warehouse, get_all, get_stats, soft_delete
+from ui.topbar import TopBar
 
 FONT = "Segoe UI"
 _TYPE_LABEL = {"TONG": "Kho Tổng", "DON_VI": "Đơn Vị"}
-
 
 class StatCard(QWidget):
     def __init__(self, icon: str, title: str, value: str, color: str = "#111"):
@@ -208,6 +208,9 @@ class TrangChuPage(QWidget):
         root.addWidget(sep2)
 
         root.addSpacing(22)
+
+        self.TABS = ["Kho", "Đơn Vị", "Hàng Hoá"]
+        self.topbar = TopBar(self.TABS, active_tab=0)
 
         # Danh sách kho section
         title_row = QHBoxLayout()
