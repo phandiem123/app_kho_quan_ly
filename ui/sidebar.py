@@ -110,9 +110,9 @@ class Sidebar(QWidget):
 
         # ── Phiếu Kho ──
         v.addWidget(SectionHeader("Phiếu Kho"))
-        self._add_item(v, "↙", "Phiếu Nhập Kho", "nhap_kho")
-        self._add_item(v, "↗", "Phiếu Xuất Kho", "xuat_kho")
-        self._add_item(v, "⇄", "Phiếu Luân Chuyển Đơn Vị", "luan_chuyen")
+        self._add_item(v, "↙", "Nhập Kho", "nhap_kho")
+        self._add_item(v, "↗", "Xuất Kho", "xuat_kho")
+        self._add_item(v, "⇄", "Luân Chuyển Đơn Vị", "luan_chuyen")
 
         # ── Thanh Xử Lý ──
         v.addWidget(SectionHeader("Thanh Xử Lý"))
