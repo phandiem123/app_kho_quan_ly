@@ -6,17 +6,16 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QCursor, QAction
-from database.receipts import Receipt, ReceiptLine, get_all as receipt_get_all, get_lines
-from database.receipts import delete as receipt_delete
+from database.xuat_kho import Issue, IssueLine, get_all, get_lines, delete as issue_delete
 
 FONT = "Segoe UI"
 
-_TABS = ["Nhập Hàng Mới", "Nhập Từ Đơn Vị", "Đơn Vị Trả Về", "Sự Kiện Trả Về"]
-_SUBTYPES = ["new", "from_unit", "unit_return", "event_return"]
+_TABS     = ["Xuất Đi Đơn Vị", "Xuất Hàng Dùng Chung"]
+_SUBTYPES = ["to_unit", "shared_loan"]
 
 _COLS = [
-    "STT", "Số Phiếu", "Số M.Hàng", "Kho Nhập",
-    "Đơn Vị Giao", "Người giao", "Ngày Nhập", "Nội dung", "Vận Chuyển", "",
+    "STT", "Số Phiếu", "Số M.Hàng", "Kho Xuất",
+    "Đơn Vị Nhận", "Người Lập", "Ngày Xuất", "Nội dung", "Vận Chuyển", "",
 ]
 
 _TABLE_STYLE = """
@@ -47,7 +46,7 @@ _BTN_DARK = """
 
 # ── Detail panel ──────────────────────────────────────────────────────────────
 class DetailPanel(QWidget):
-    def __init__(self, receipt: Receipt, lines: list[ReceiptLine], parent=None):
+    def __init__(self, issue: Issue, lines: list[IssueLine], parent=None):
         super().__init__(parent)
         self.setAutoFillBackground(True)
         self.setStyleSheet("""
@@ -59,33 +58,26 @@ class DetailPanel(QWidget):
         root.setContentsMargins(28, 14, 28, 14)
         root.setSpacing(10)
 
-        self._receipt = receipt
+        self._issue = issue
         self._lines = lines
 
         top = QHBoxLayout()
-        title = QLabel("Chi Tiết Phiếu nhập")
+        title = QLabel("Chi Tiết Phiếu Xuất")
         title.setFont(QFont(FONT, 13, QFont.Weight.Bold))
         title.setStyleSheet("color: #111;")
         top.addWidget(title)
         top.addStretch()
 
-        btn_export = QPushButton("Xuất Chi Tiết")
-        btn_export.setFixedHeight(30)
-        btn_export.setFont(QFont(FONT, 11))
-        btn_export.setStyleSheet(_BTN_GRAY)
-        btn_export.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_export.clicked.connect(self._export_excel)
-        top.addSpacing(6)
-        top.addWidget(btn_export)
+        if issue.subtype == "to_unit":
+            btn_print = QPushButton("Xuất Phiếu Xuất")
+            btn_print.setFixedHeight(30)
+            btn_print.setFont(QFont(FONT, 11))
+            btn_print.setStyleSheet(_BTN_DARK)
+            btn_print.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_print.clicked.connect(self._export_word)
+            top.addSpacing(6)
+            top.addWidget(btn_print)
 
-        btn_print = QPushButton("Xuất Phiếu Nhập")
-        btn_print.setFixedHeight(30)
-        btn_print.setFont(QFont(FONT, 11))
-        btn_print.setStyleSheet(_BTN_DARK)
-        btn_print.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_print.clicked.connect(self._export_word)
-        top.addSpacing(6)
-        top.addWidget(btn_print)
         root.addLayout(top)
 
         grid = QGridLayout()
@@ -110,21 +102,17 @@ class DetailPanel(QWidget):
             hl.addWidget(v, 1)
             return w
 
-        source = receipt.from_warehouse_name or receipt.supplier
-        source_label = {
-            "from_unit":    "Đơn Vị Giao",
-            "unit_return":  "Đơn Vị Trả",
-            "event_return": "Nguồn Trả",
-        }.get(receipt.subtype, "Đơn Vị Giao")
+        dest       = issue.to_warehouse_name or issue.recipient
+        dest_label = "Đơn Vị Nhận" if issue.subtype == "to_unit" else "Đơn Vị Mượn"
 
-        grid.addWidget(pair("Số Phiếu", receipt.reference_number), 0, 0)
-        grid.addWidget(pair("Kho Nhập", receipt.to_warehouse_name), 0, 1)
-        grid.addWidget(pair(source_label, source), 0, 2)
-        grid.addWidget(pair("Người Giao", receipt.created_by), 1, 0)
-        grid.addWidget(pair("Ngày Nhập", receipt.transaction_date), 1, 1)
-        if receipt.subtype == "new":
-            grid.addWidget(pair("Vận Chuyển", receipt.transporter), 1, 2)
-        grid.addWidget(pair("Nội dung", receipt.notes), 2, 0, 1, 3)
+        grid.addWidget(pair("Số Phiếu",  issue.reference_number), 0, 0)
+        grid.addWidget(pair("Kho Xuất",  issue.from_warehouse_name), 0, 1)
+        grid.addWidget(pair(dest_label,  dest), 0, 2)
+        grid.addWidget(pair("Người Lập", issue.created_by), 1, 0)
+        grid.addWidget(pair("Ngày Xuất", issue.transaction_date), 1, 1)
+        if issue.subtype == "to_unit":
+            grid.addWidget(pair("Vận Chuyển", issue.transporter), 1, 2)
+        grid.addWidget(pair("Nội dung", issue.notes), 2, 0, 1, 3)
         root.addLayout(grid)
 
         sub_lbl = QLabel("Danh Sách Mặt hàng")
@@ -132,11 +120,8 @@ class DetailPanel(QWidget):
         sub_lbl.setStyleSheet("color: #111;")
         root.addWidget(sub_lbl)
 
-        show_price   = (receipt.subtype == "new")
-        show_quality = (receipt.subtype == "from_unit")
+        show_price = (issue.subtype == "to_unit")
         sub_cols = ["STT", "Mã hàng", "Tên Hàng", "ĐVT", "Số lượng"]
-        if show_quality:
-            sub_cols.append("Mức HH")
         if show_price:
             sub_cols += ["Đơn Giá", "Thành Tiền"]
         sub_cols.append("Ghi Chú")
@@ -167,8 +152,6 @@ class DetailPanel(QWidget):
             (QHeaderView.ResizeMode.Fixed, 72),
             (QHeaderView.ResizeMode.Fixed, 84),
         ]
-        if show_quality:
-            modes.append((QHeaderView.ResizeMode.Fixed, 72))
         if show_price:
             modes += [
                 (QHeaderView.ResizeMode.Fixed, 100),
@@ -195,18 +178,13 @@ class DetailPanel(QWidget):
                 th.addWidget(tl)
                 root.addWidget(tw)
 
-        self._load_lines(lines, show_price, show_quality)
+        self._load_lines(lines, show_price)
 
-    def _load_lines(self, lines: list[ReceiptLine], show_price: bool, show_quality: bool = False):
+    def _load_lines(self, lines: list[IssueLine], show_price: bool):
         self._sub.setRowCount(0)
         center_cols = {0, 4}
-        col_offset = 5
-        if show_quality:
-            center_cols.add(col_offset)
-            col_offset += 1
         if show_price:
-            center_cols.add(col_offset)
-            center_cols.add(col_offset + 1)
+            center_cols.update({5, 6})
 
         for i, line in enumerate(lines):
             r = self._sub.rowCount()
@@ -214,8 +192,6 @@ class DetailPanel(QWidget):
             self._sub.setRowHeight(r, 38)
             cells = [str(i + 1), line.item_code, line.item_name,
                      line.unit_of_measure, str(line.quantity)]
-            if show_quality:
-                cells.append(line.quality_level)
             if show_price:
                 total = line.quantity * line.unit_price
                 cells += [
@@ -231,137 +207,29 @@ class DetailPanel(QWidget):
                 self._sub.setItem(r, c, cell)
         self._sub.setFixedHeight(36 + max(1, len(lines)) * 38)
 
-    def _export_excel(self):
-        import openpyxl
-        from openpyxl.styles import Font as XFont, PatternFill, Alignment, Border, Side
-        from datetime import date as _date
-
-        r = self._receipt
-        lines = self._lines
-        show_price = (r.subtype == "new")
-        show_quality = (r.subtype == "from_unit")
-
-        default_name = f"PhieuNhap_{r.reference_number or 'export'}_{_date.today().isoformat()}.xlsx"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Lưu file Excel", default_name,
-            "Excel Files (*.xlsx)"
-        )
-        if not path:
-            return
-
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Chi Tiết Phiếu Nhập"
-
-        # ── header info block ──────────────────────────────────────────────
-        hdr_font = XFont(name="Calibri", bold=True, size=11)
-        val_font = XFont(name="Calibri", size=11)
-
-        def write_pair(row, label, value):
-            c1 = ws.cell(row=row, column=1, value=label)
-            c1.font = hdr_font
-            c2 = ws.cell(row=row, column=2, value=value)
-            c2.font = val_font
-
-        write_pair(1, "Số Phiếu:", r.reference_number)
-        write_pair(2, "Kho Nhập:", r.to_warehouse_name)
-        source_lbl = {"from_unit": "Đơn Vị Giao", "shared_return": "Đơn Vị Trả"}.get(r.subtype, "Đơn Vị Giao")
-        write_pair(3, f"{source_lbl}:", r.from_warehouse_name or r.supplier)
-        write_pair(4, "Người Giao:", r.created_by)
-        write_pair(5, "Ngày Nhập:", r.transaction_date)
-        if r.subtype == "new":
-            write_pair(6, "Vận Chuyển:", r.transporter)
-        write_pair(7, "Nội dung:", r.notes)
-
-        # ── column headers ─────────────────────────────────────────────────
-        tbl_row = 9
-        cols = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"]
-        if show_quality:
-            cols.append("Mức HH")
-        if show_price:
-            cols += ["Đơn Giá", "Thành Tiền"]
-        cols.append("Ghi Chú")
-
-        fill_hdr = PatternFill("solid", fgColor="333333")
-        th_font = XFont(name="Calibri", bold=True, size=11, color="FFFFFF")
-        thin = Side(style="thin", color="CCCCCC")
-        border = Border(bottom=thin)
-
-        for ci, col_name in enumerate(cols, start=1):
-            cell = ws.cell(row=tbl_row, column=ci, value=col_name)
-            cell.font = th_font
-            cell.fill = fill_hdr
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-
-        # ── data rows ──────────────────────────────────────────────────────
-        for i, line in enumerate(lines):
-            dr = tbl_row + 1 + i
-            row_vals = [i + 1, line.item_code, line.item_name,
-                        line.unit_of_measure, line.quantity]
-            if show_quality:
-                row_vals.append(line.quality_level)
-            if show_price:
-                row_vals += [line.unit_price, line.quantity * line.unit_price]
-            row_vals.append(line.notes)
-
-            for ci, val in enumerate(row_vals, start=1):
-                cell = ws.cell(row=dr, column=ci, value=val)
-                cell.font = val_font
-                cell.border = border
-                if ci in (1, 4, 5):
-                    cell.alignment = Alignment(horizontal="center")
-                if show_price and ci in (len(cols) - 1, len(cols)):
-                    cell.number_format = '#,##0'
-
-        # ── total row ──────────────────────────────────────────────────────
-        if show_price and lines:
-            total = sum(l.quantity * l.unit_price for l in lines)
-            total_row = tbl_row + 1 + len(lines) + 1
-            tc = ws.cell(row=total_row, column=len(cols) - 1, value="Tổng tiền:")
-            tc.font = XFont(name="Calibri", bold=True, size=11)
-            tc.alignment = Alignment(horizontal="right")
-            tv = ws.cell(row=total_row, column=len(cols), value=total)
-            tv.font = XFont(name="Calibri", bold=True, size=11)
-            tv.number_format = '#,##0'
-
-        # ── column widths ──────────────────────────────────────────────────
-        ws.column_dimensions["A"].width = 6
-        ws.column_dimensions["B"].width = 14
-        ws.column_dimensions["C"].width = 32
-        ws.column_dimensions["D"].width = 10
-        ws.column_dimensions["E"].width = 12
-        col_letters = [chr(ord("F") + k) for k in range(len(cols) - 5)]
-        for ltr in col_letters:
-            ws.column_dimensions[ltr].width = 16
-
-        wb.save(path)
-        QMessageBox.information(self, "Xuất Excel", f"Đã lưu file:\n{path}")
-
     def _export_word(self):
-        from ui.word_export import export_nhap_kho
-        export_nhap_kho(self, self._receipt, self._lines)
+        from ui.word_export import export_xuat_kho
+        export_xuat_kho(self, self._issue, self._lines)
 
 
 # ── Main Page ─────────────────────────────────────────────────────────────────
-class NhapKhoPage(QWidget):
+class XuatKhoPage(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setStyleSheet("NhapKhoPage { background: #fafafa; }")
-        self._cache: list[Receipt] = []
+        self.setStyleSheet("XuatKhoPage { background: #fafafa; }")
+        self._cache: list[Issue] = []
         self._expanded_data_row: int | None = None
-        self._active_subtype = "new"
-        self._receipts_order: list[Receipt] = []
+        self._active_subtype = "to_unit"
+        self._issues_order: list[Issue] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(36, 32, 36, 24)
         root.setSpacing(0)
 
-        # ── Top row: tabs + search + year ─────────────────────────────────
         top = QHBoxLayout()
         top.setSpacing(10)
 
-        # Pill tab bar
         tab_container = QWidget()
         tab_container.setFixedHeight(36)
         tab_container.setStyleSheet("background: #f0f0f0; border-radius: 9px;")
@@ -403,17 +271,13 @@ class NhapKhoPage(QWidget):
                 color: #111; min-width: 120px;
             }
             QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: center right;
-                width: 28px;
-                border-left: 1px solid #e0e0e0;
-                border-top-right-radius: 8px;
-                border-bottom-right-radius: 8px;
+                subcontrol-origin: padding; subcontrol-position: center right;
+                width: 28px; border-left: 1px solid #e0e0e0;
+                border-top-right-radius: 8px; border-bottom-right-radius: 8px;
                 background: white;
             }
             QComboBox::down-arrow {
-                width: 10px; height: 10px;
-                image: none;
+                width: 10px; height: 10px; image: none;
                 border-top: 5px solid #111;
                 border-left: 5px solid transparent;
                 border-right: 5px solid transparent;
@@ -435,7 +299,6 @@ class NhapKhoPage(QWidget):
         root.addLayout(top)
         root.addSpacing(16)
 
-        # ── Table card ────────────────────────────────────────────────────
         card = QFrame()
         card.setStyleSheet("QFrame { background: white; border-radius: 12px; border: 1px solid #efefef; }")
         card_v = QVBoxLayout(card)
@@ -477,7 +340,6 @@ class NhapKhoPage(QWidget):
         root.addWidget(card, 1)
         root.addSpacing(16)
 
-        # ── Bottom ─────────────────────────────────────────────────────────
         bot = QHBoxLayout()
         bot.addStretch()
         self._btn_new = QPushButton("+ Tạo Phiếu")
@@ -489,24 +351,16 @@ class NhapKhoPage(QWidget):
         bot.addWidget(self._btn_new)
         root.addLayout(bot)
 
-        # Ẩn cột Vận Chuyển cho tab 2 và 3 (index 8)
         self._update_col_visibility()
         self.refresh()
-
-    # ── Tab ───────────────────────────────────────────────────────────────────
 
     def _on_tab(self, idx: int):
         self._active_subtype = _SUBTYPES[idx]
         self._apply_tab_style(idx)
         self._search.clear()
         self._update_col_visibility()
-        # Update column header for source warehouse
-        label = {
-            "from_unit":    "Đơn Vị Giao",
-            "unit_return":  "Đơn Vị Trả",
-            "event_return": "Nguồn Trả",
-        }.get(self._active_subtype, "Đơn Vị Giao")
-        self._table.setHorizontalHeaderItem(4, _hdr_item(label))
+        dest_lbl = "Đơn Vị Mượn" if self._active_subtype == "shared_loan" else "Đơn Vị Nhận"
+        self._table.setHorizontalHeaderItem(4, _hdr_item(dest_lbl))
         self._reload()
 
     def _apply_tab_style(self, active_idx: int):
@@ -524,16 +378,14 @@ class NhapKhoPage(QWidget):
                 """)
 
     def _update_col_visibility(self):
-        self._table.setColumnHidden(8, self._active_subtype != "new")
-
-    # ── Data ──────────────────────────────────────────────────────────────────
+        self._table.setColumnHidden(8, self._active_subtype != "to_unit")
 
     def refresh(self):
         self._reload()
 
     def _reload(self):
         year = self._year_combo.currentData()
-        self._cache = receipt_get_all(year=year, subtype=self._active_subtype)
+        self._cache = get_all(year=year, subtype=self._active_subtype)
         self._apply_filter()
 
     def _apply_filter(self):
@@ -542,9 +394,9 @@ class NhapKhoPage(QWidget):
             r for r in self._cache
             if not q or any(q in s for s in [
                 r.reference_number.lower(),
+                r.from_warehouse_name.lower(),
                 r.to_warehouse_name.lower(),
-                (r.from_warehouse_name or "").lower(),
-                (r.supplier or "").lower(),
+                (r.recipient or "").lower(),
                 (r.created_by or "").lower(),
                 (r.transporter or "").lower(),
                 (r.notes or "").lower(),
@@ -553,22 +405,22 @@ class NhapKhoPage(QWidget):
         ]
         self._load_table(data)
 
-    def _load_table(self, receipts: list[Receipt]):
+    def _load_table(self, issues: list[Issue]):
         self._expanded_data_row = None
         self._table.clearSpans()
-        self._table.setRowCount(len(receipts) * 2)
+        self._table.setRowCount(len(issues) * 2)
         n = len(_COLS)
-        for i, r in enumerate(receipts):
-            dr = i * 2
+        for i, r in enumerate(issues):
+            dr  = i * 2
             det = i * 2 + 1
             self._table.setRowHeight(dr, 52)
             self._table.setRowHeight(det, 0)
             self._table.setSpan(det, 0, 1, n)
 
-            source = r.from_warehouse_name or r.supplier
+            dest  = r.to_warehouse_name or r.recipient
             cells = [
                 str(i + 1), r.reference_number, str(r.line_count),
-                r.to_warehouse_name, source,
+                r.from_warehouse_name, dest,
                 r.created_by, r.transaction_date,
                 r.notes, r.transporter,
             ]
@@ -593,15 +445,13 @@ class NhapKhoPage(QWidget):
             dots.clicked.connect(lambda _, rx=rx: self._show_menu(rx))
             self._table.setCellWidget(dr, n - 1, dots)
 
-        self._receipts_order = receipts
-
-    # ── Interaction ───────────────────────────────────────────────────────────
+        self._issues_order = issues
 
     def _on_cell_clicked(self, row: int, col: int):
         if row % 2 == 1:
             return
         data_idx = row // 2
-        det_row = row + 1
+        det_row  = row + 1
 
         if self._expanded_data_row == row:
             self._table.setRowHeight(det_row, 0)
@@ -614,15 +464,15 @@ class NhapKhoPage(QWidget):
             self._table.setRowHeight(prev, 0)
             self._table.removeCellWidget(prev, 0)
 
-        receipt = self._receipts_order[data_idx]
-        lines = get_lines(receipt.id)
-        panel = DetailPanel(receipt, lines)
+        issue = self._issues_order[data_idx]
+        lines = get_lines(issue.id)
+        panel = DetailPanel(issue, lines)
         h = 200 + max(1, len(lines)) * 38 + 40
         self._table.setCellWidget(det_row, 0, panel)
         self._table.setRowHeight(det_row, h)
         self._expanded_data_row = row
 
-    def _show_menu(self, receipt: Receipt):
+    def _show_menu(self, issue: Issue):
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu { background: white; border: 1px solid #e5e5e5;
@@ -633,36 +483,36 @@ class NhapKhoPage(QWidget):
             QMenu::separator { height: 1px; background: #efefef; margin: 2px 8px; }
         """)
         act_edit = QAction("Sửa", self)
-        act_edit.triggered.connect(lambda: self._edit(receipt))
+        act_edit.triggered.connect(lambda: self._edit(issue))
         act_del = QAction("Xóa", self)
-        act_del.triggered.connect(lambda: self._delete(receipt))
+        act_del.triggered.connect(lambda: self._delete(issue))
         menu.addAction(act_edit)
         menu.addSeparator()
         menu.addAction(act_del)
         menu.exec(self._table.cursor().pos())
 
     def _on_add(self):
-        from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
-        dlg = NhapKhoFormDialog(self, subtype=self._active_subtype)
+        from ui.dialogs.xuat_kho_form import XuatKhoFormDialog
+        dlg = XuatKhoFormDialog(self, subtype=self._active_subtype)
         if dlg.exec():
             self.refresh()
 
-    def _edit(self, receipt: Receipt):
-        from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
-        dlg = NhapKhoFormDialog(self, receipt=receipt)
+    def _edit(self, issue: Issue):
+        from ui.dialogs.xuat_kho_form import XuatKhoFormDialog
+        dlg = XuatKhoFormDialog(self, issue=issue)
         if dlg.exec():
             self.refresh()
 
-    def _delete(self, receipt: Receipt):
+    def _delete(self, issue: Issue):
         reply = QMessageBox.question(
             self, "Xác nhận xóa",
-            f"Xóa Phiếu <b>{receipt.reference_number}</b>?<br>"
+            f"Xóa Phiếu <b>{issue.reference_number}</b>?<br>"
             "Tồn kho liên quan sẽ được hoàn lại.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            receipt_delete(receipt.id)
+            issue_delete(issue.id)
             self.refresh()
 
 

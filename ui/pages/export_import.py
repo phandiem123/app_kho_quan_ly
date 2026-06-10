@@ -1,0 +1,509 @@
+"""Trang Export / Import dữ liệu."""
+
+from __future__ import annotations
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QFrame, QFileDialog, QMessageBox,
+)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
+import database
+
+FONT = "Segoe UI"
+
+CARD_STYLE = """
+    QFrame {
+        background: white;
+        border: 1px solid #e8e8e8;
+        border-radius: 10px;
+    }
+"""
+BTN_PRIMARY = """
+    QPushButton {
+        background: #111;
+        color: white;
+        border-radius: 6px;
+        padding: 6px 16px;
+        border: none;
+    }
+    QPushButton:hover { background: #333; }
+"""
+BTN_SECONDARY = """
+    QPushButton {
+        background: white;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 6px 14px;
+        color: #444;
+    }
+    QPushButton:hover { background: #f5f5f5; }
+"""
+
+
+class _Card(QFrame):
+    def __init__(self, title: str, description: str,
+                 primary_label: str, primary_cb,
+                 secondary_label: str | None = None, secondary_cb=None):
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet(CARD_STYLE)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 18, 20, 18)
+        v.setSpacing(8)
+
+        t = QLabel(title)
+        t.setFont(QFont(FONT, 13, QFont.Weight.Bold))
+        t.setStyleSheet("color: #111; border: none;")
+        v.addWidget(t)
+
+        d = QLabel(description)
+        d.setFont(QFont(FONT, 11))
+        d.setStyleSheet("color: #666; border: none;")
+        d.setWordWrap(True)
+        v.addWidget(d)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addStretch()
+
+        if secondary_label and secondary_cb:
+            sb = QPushButton(secondary_label)
+            sb.setFont(QFont(FONT, 11))
+            sb.setStyleSheet(BTN_SECONDARY)
+            sb.clicked.connect(secondary_cb)
+            row.addWidget(sb)
+
+        pb = QPushButton(primary_label)
+        pb.setFont(QFont(FONT, 11))
+        pb.setStyleSheet(BTN_PRIMARY)
+        pb.clicked.connect(primary_cb)
+        row.addWidget(pb)
+
+        v.addLayout(row)
+
+
+class ExportImportPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._build_ui()
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        v = QVBoxLayout(self)
+        v.setContentsMargins(32, 28, 32, 28)
+        v.setSpacing(20)
+
+        title = QLabel("Export / Import Dữ Liệu")
+        title.setFont(QFont(FONT, 20, QFont.Weight.Bold))
+        title.setStyleSheet("color: #111;")
+        v.addWidget(title)
+
+        # ── Xuất dữ liệu ──────────────────────────────────────────────────────
+        v.addWidget(_section_header("XUẤT DỮ LIỆU"))
+
+        export_row = QHBoxLayout()
+        export_row.setSpacing(16)
+        export_row.addWidget(_Card(
+            "Tồn Kho",
+            "Xuất toàn bộ tồn kho (kho, mặt hàng, mức hao hỏng, số lượng) ra file Excel.",
+            "Xuất Excel", self._export_inventory,
+        ))
+        export_row.addWidget(_Card(
+            "Danh Mục Mặt Hàng",
+            "Xuất danh sách mặt hàng (mã, tên, đơn vị tính, niên hạn, đơn giá) ra file Excel.",
+            "Xuất Excel", self._export_item_types,
+        ))
+        export_row.addWidget(_Card(
+            "Danh Sách Kho / Đơn Vị",
+            "Xuất danh sách kho và đơn vị (mã, tên, loại, địa chỉ) ra file Excel.",
+            "Xuất Excel", self._export_warehouses,
+        ))
+        v.addLayout(export_row)
+
+        # ── Nhập dữ liệu ──────────────────────────────────────────────────────
+        v.addWidget(_section_header("NHẬP DỮ LIỆU"))
+
+        import_row = QHBoxLayout()
+        import_row.setSpacing(16)
+        import_row.addWidget(_Card(
+            "Danh Mục Mặt Hàng",
+            "Nhập danh sách mặt hàng từ file Excel. Mã đã tồn tại sẽ được cập nhật.",
+            "Nhập từ Excel", self._import_item_types,
+            secondary_label="Tải Mẫu", secondary_cb=self._template_item_types,
+        ))
+        import_row.addWidget(_Card(
+            "Danh Sách Kho / Đơn Vị",
+            "Nhập danh sách kho/đơn vị từ file Excel. Mã đã tồn tại sẽ được cập nhật.",
+            "Nhập từ Excel", self._import_warehouses,
+            secondary_label="Tải Mẫu", secondary_cb=self._template_warehouses,
+        ))
+        import_row.addStretch()
+        v.addLayout(import_row)
+
+        v.addStretch()
+
+    # ── Export ────────────────────────────────────────────────────────────────
+
+    def _export_inventory(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất Tồn Kho", "ton_kho.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+
+            conn = database.get_conn()
+            rows = conn.execute("""
+                SELECT w.code AS wh_code, w.name AS wh_name, w.type AS wh_type,
+                       t.code AS item_code, t.name AS item_name, t.unit_of_measure,
+                       i.quality_level, i.quantity,
+                       i.received_at_unit_date, i.manufacture_date, i.lot_number,
+                       i.is_shared, i.notes
+                FROM inventory i
+                JOIN warehouses w ON w.id = i.warehouse_id
+                JOIN item_types t  ON t.id = i.item_type_id
+                WHERE i.quantity > 0
+                ORDER BY w.type, w.name, t.name, i.quality_level
+            """).fetchall()
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Tồn Kho"
+
+            headers = [
+                "Mã Kho", "Tên Kho", "Loại Kho",
+                "Mã Hàng", "Tên Hàng", "ĐVT",
+                "Mức HH", "Số Lượng",
+                "Ngày Nhập ĐV", "Ngày SX", "Số Lô",
+                "Dùng Chung", "Ghi Chú",
+            ]
+            _write_header(ws, headers)
+
+            for r in rows:
+                ws.append([
+                    r["wh_code"], r["wh_name"],
+                    "Kho Tổng" if r["wh_type"] == "TONG" else "Đơn Vị",
+                    r["item_code"], r["item_name"], r["unit_of_measure"],
+                    r["quality_level"], r["quantity"],
+                    r["received_at_unit_date"] or "",
+                    r["manufacture_date"] or "",
+                    r["lot_number"] or "",
+                    "Có" if r["is_shared"] else "",
+                    r["notes"] or "",
+                ])
+
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _export_item_types(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất Danh Mục Mặt Hàng", "danh_muc_hang.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+
+            conn = database.get_conn()
+            rows = conn.execute(
+                "SELECT code, name, unit_of_measure, total_lifespan_months,"
+                "       unit_price, notes, is_active"
+                " FROM item_types ORDER BY name"
+            ).fetchall()
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Mặt Hàng"
+
+            _write_header(ws, [
+                "Mã Hàng", "Tên Hàng", "Đơn Vị Tính",
+                "Niên Hạn (tháng)", "Đơn Giá", "Ghi Chú", "Trạng Thái",
+            ])
+            for r in rows:
+                ws.append([
+                    r["code"], r["name"], r["unit_of_measure"],
+                    r["total_lifespan_months"],
+                    float(r["unit_price"] or 0),
+                    r["notes"] or "",
+                    "Hoạt động" if r["is_active"] else "Đã ẩn",
+                ])
+
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} mặt hàng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _export_warehouses(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất Danh Sách Kho", "danh_sach_kho.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+
+            conn = database.get_conn()
+            rows = conn.execute(
+                "SELECT code, name, type, address, notes, is_active"
+                " FROM warehouses ORDER BY type, name"
+            ).fetchall()
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Kho"
+
+            _write_header(ws, [
+                "Mã Kho", "Tên Kho", "Loại (TONG/DON_VI)",
+                "Địa Chỉ", "Ghi Chú", "Trạng Thái",
+            ])
+            for r in rows:
+                ws.append([
+                    r["code"], r["name"], r["type"],
+                    r["address"] or "", r["notes"] or "",
+                    "Hoạt động" if r["is_active"] else "Đã ẩn",
+                ])
+
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} kho/đơn vị.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    # ── Import ────────────────────────────────────────────────────────────────
+
+    def _import_item_types(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn File Excel", "", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path)
+            ws = wb.active
+            rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+            conn = database.get_conn()
+            inserted = updated = skipped = 0
+            errors = []
+
+            for i, row in enumerate(rows, start=2):
+                if not row or not row[0]:
+                    continue
+                try:
+                    code = str(row[0]).strip()
+                    name = str(row[1]).strip() if row[1] else ""
+                    uom  = str(row[2]).strip() if row[2] else ""
+                    life = int(row[3]) if row[3] else 0
+                    price = float(row[4]) if row[4] else 0.0
+                    notes = str(row[5]).strip() if len(row) > 5 and row[5] else ""
+
+                    if not code or not name or not uom or not life:
+                        errors.append(f"Dòng {i}: thiếu dữ liệu bắt buộc")
+                        skipped += 1
+                        continue
+
+                    existing = conn.execute(
+                        "SELECT id FROM item_types WHERE code=?", (code,)
+                    ).fetchone()
+
+                    if existing:
+                        conn.execute(
+                            "UPDATE item_types SET name=?, unit_of_measure=?,"
+                            " total_lifespan_months=?, unit_price=?, notes=? WHERE code=?",
+                            (name, uom, life, price, notes, code),
+                        )
+                        updated += 1
+                    else:
+                        conn.execute(
+                            "INSERT INTO item_types (code, name, unit_of_measure,"
+                            " total_lifespan_months, unit_price, notes)"
+                            " VALUES (?,?,?,?,?,?)",
+                            (code, name, uom, life, price, notes),
+                        )
+                        inserted += 1
+                except Exception as row_err:
+                    errors.append(f"Dòng {i}: {row_err}")
+                    skipped += 1
+
+            conn.commit()
+
+            msg = f"Thêm mới: {inserted}   Cập nhật: {updated}   Bỏ qua: {skipped}"
+            if errors:
+                msg += "\n\nChi tiết lỗi:\n" + "\n".join(errors[:10])
+            QMessageBox.information(self, "Nhập hoàn tất", msg)
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _import_warehouses(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn File Excel", "", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path)
+            ws = wb.active
+            rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+            conn = database.get_conn()
+            inserted = updated = skipped = 0
+            errors = []
+            VALID_TYPES = {"TONG", "DON_VI"}
+
+            for i, row in enumerate(rows, start=2):
+                if not row or not row[0]:
+                    continue
+                try:
+                    code    = str(row[0]).strip()
+                    name    = str(row[1]).strip() if row[1] else ""
+                    wh_type = str(row[2]).strip().upper() if row[2] else ""
+                    address = str(row[3]).strip() if len(row) > 3 and row[3] else ""
+                    notes   = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+
+                    if not code or not name or wh_type not in VALID_TYPES:
+                        errors.append(
+                            f"Dòng {i}: thiếu hoặc sai dữ liệu "
+                            f"(Loại phải là TONG hoặc DON_VI)"
+                        )
+                        skipped += 1
+                        continue
+
+                    existing = conn.execute(
+                        "SELECT id FROM warehouses WHERE code=?", (code,)
+                    ).fetchone()
+
+                    if existing:
+                        conn.execute(
+                            "UPDATE warehouses SET name=?, type=?, address=?, notes=?"
+                            " WHERE code=?",
+                            (name, wh_type, address, notes, code),
+                        )
+                        updated += 1
+                    else:
+                        conn.execute(
+                            "INSERT INTO warehouses (code, name, type, address, notes)"
+                            " VALUES (?,?,?,?,?)",
+                            (code, name, wh_type, address, notes),
+                        )
+                        inserted += 1
+                except Exception as row_err:
+                    errors.append(f"Dòng {i}: {row_err}")
+                    skipped += 1
+
+            conn.commit()
+
+            msg = f"Thêm mới: {inserted}   Cập nhật: {updated}   Bỏ qua: {skipped}"
+            if errors:
+                msg += "\n\nChi tiết lỗi:\n" + "\n".join(errors[:10])
+            QMessageBox.information(self, "Nhập hoàn tất", msg)
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    # ── Download templates ────────────────────────────────────────────────────
+
+    def _template_item_types(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu File Mẫu", "mau_mat_hang.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Mặt Hàng"
+            _write_header(ws, [
+                "Mã Hàng *", "Tên Hàng *", "Đơn Vị Tính *",
+                "Niên Hạn (tháng) *", "Đơn Giá", "Ghi Chú",
+            ])
+            ws.append(["AK47", "Súng AK47", "cái", 120, 15000000, ""])
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _template_warehouses(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu File Mẫu", "mau_kho.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Kho"
+            _write_header(ws, [
+                "Mã Kho *", "Tên Kho *", "Loại (TONG/DON_VI) *",
+                "Địa Chỉ", "Ghi Chú",
+            ])
+            ws.append(["D6", "Kho Tổng D6", "TONG", "123 Đường ABC", ""])
+            ws.append(["DV01", "Đơn Vị 01", "DON_VI", "456 Đường XYZ", ""])
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _section_header(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setFont(QFont(FONT, 10, QFont.Weight.Bold))
+    lbl.setStyleSheet("color: #999;")
+    return lbl
+
+
+def _check_openpyxl(parent: QWidget) -> bool:
+    try:
+        import openpyxl  # noqa: F401
+        return True
+    except ImportError:
+        QMessageBox.warning(
+            parent, "Thiếu thư viện",
+            "Vui lòng cài đặt:\n\npip install openpyxl"
+        )
+        return False
+
+
+def _write_header(ws, headers: list[str]):
+    from openpyxl.styles import Font, PatternFill, Alignment
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True, name="Calibri")
+        cell.fill = PatternFill(fill_type="solid", fgColor="111111")
+        cell.font = Font(bold=True, color="FFFFFF", name="Calibri")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 20
+
+
+def _auto_width(ws):
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=0)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)

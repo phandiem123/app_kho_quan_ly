@@ -17,7 +17,7 @@ _TYPE_LABEL = {"TONG": "Kho Tổng", "DON_VI": "Đơn Vị"}
 _TABLE_STYLE = """
     QTableWidget { border: none; background: white; outline: 0; }
     QHeaderView::section {
-        background: white; color: #aaa; font-size: 12px;
+        background: white; color: #111; font-size: 12px;
         border: none; border-bottom: 1px solid #efefef;
         padding: 8px 12px; font-weight: normal;
     }
@@ -57,7 +57,7 @@ class StatCard(QWidget):
         v.addWidget(val_lbl)
         ttl_lbl = QLabel(title)
         ttl_lbl.setFont(QFont(FONT, 11))
-        ttl_lbl.setStyleSheet("color: #999; border: none;")
+        ttl_lbl.setStyleSheet("color: #111; border: none;")
         v.addWidget(ttl_lbl)
 
 
@@ -114,7 +114,7 @@ class DotsButton(QPushButton):
 
 # ── Bảng Kho / Đơn Vị ────────────────────────────────────────────────────────
 class KhoTable(QTableWidget):
-    COLS = ["STT", "Tên Kho", "Mã Kho", "Loại", "Địa Chỉ", "Ghi Chú"]
+    COLS = ["STT", "Tên Kho", "Mã Kho", "Loại", "Địa Chỉ", "Ghi Chú", ""]
 
     def __init__(self):
         super().__init__(0, len(self.COLS))
@@ -135,32 +135,37 @@ class KhoTable(QTableWidget):
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 56)
         self.setColumnWidth(2, 100)
         self.setColumnWidth(3, 100)
+        self.setColumnWidth(6, 52)
 
     def set_type_col_visible(self, visible: bool):
         self.setColumnHidden(3, not visible)
 
-    def load(self, warehouses: list[Warehouse]):
+    def load(self, warehouses: list[Warehouse], on_edit=None, on_delete=None):
         self.setRowCount(0)
         for i, wh in enumerate(warehouses):
             r = self.rowCount()
             self.insertRow(r)
             self.setRowHeight(r, 52)
             cells = [str(i + 1), wh.name, wh.code,
-                     _TYPE_LABEL.get(wh.type, wh.type), wh.address, wh.notes]
+                     _TYPE_LABEL.get(wh.type, wh.type), wh.address or "", wh.notes or ""]
             for col, val in enumerate(cells):
                 item = QTableWidgetItem(val)
                 item.setFont(QFont(FONT, 12))
                 if col == 0:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.setItem(r, col, item)
+            if on_edit or on_delete:
+                btn = DotsButton(wh, None, on_edit, on_delete)
+                self.setCellWidget(r, 6, btn)
 
 
 # ── Bảng Hàng Hoá ─────────────────────────────────────────────────────────────
 class HangHoaTable(QTableWidget):
-    COLS = ["STT", "Tên Hàng", "Mã Hàng", "Đơn Vị Tính", "Niên Hạn (năm)", "Ghi Chú"]
+    COLS = ["STT", "Tên Hàng", "Mã Hàng", "Đơn Vị Tính", "Niên Hạn (năm)", "Đơn Giá", "Ghi Chú", ""]
 
     def __init__(self):
         super().__init__(0, len(self.COLS))
@@ -180,13 +185,17 @@ class HangHoaTable(QTableWidget):
         h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 56)
         self.setColumnWidth(2, 110)
         self.setColumnWidth(3, 120)
         self.setColumnWidth(4, 130)
+        self.setColumnWidth(5, 120)
+        self.setColumnWidth(7, 52)
 
-    def load(self, items: list[ItemType]):
+    def load(self, items: list[ItemType], on_edit=None, on_delete=None):
         self.setRowCount(0)
         for i, it in enumerate(items):
             r = self.rowCount()
@@ -194,14 +203,18 @@ class HangHoaTable(QTableWidget):
             self.setRowHeight(r, 52)
             months = it.total_lifespan_months
             years_str = f"{months // 12}" if months % 12 == 0 else f"{months / 12:.1f}"
+            price_str = f"{it.unit_price:,.0f}" if it.unit_price else "—"
             cells = [str(i + 1), it.name, it.code,
-                     it.unit_of_measure, years_str, it.notes]
+                     it.unit_of_measure, years_str, price_str, it.notes or ""]
             for col, val in enumerate(cells):
                 cell = QTableWidgetItem(val)
                 cell.setFont(QFont(FONT, 12))
-                if col in (0, 4):
+                if col in (0, 4, 5):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.setItem(r, col, cell)
+            if on_edit or on_delete:
+                btn = DotsButton(it, None, on_edit, on_delete)
+                self.setCellWidget(r, 7, btn)
 
 
 # ── Trang Chủ ─────────────────────────────────────────────────────────────────
@@ -226,7 +239,7 @@ class TrangChuPage(QWidget):
 
         sub = QLabel("Tổng quan hệ thống quản lý kho hàng DCCD")
         sub.setFont(QFont(FONT, 12))
-        sub.setStyleSheet("color: #999; margin-top: 4px;")
+        sub.setStyleSheet("color: #111; margin-top: 4px;")
         root.addWidget(sub)
 
         root.addSpacing(28)
@@ -239,7 +252,7 @@ class TrangChuPage(QWidget):
         # ── Stat cards ────────────────────────────────────────────────────────
         sec = QLabel("Thống kê nhanh")
         sec.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-        sec.setStyleSheet("color: #555;")
+        sec.setStyleSheet("color: #111;")
         root.addWidget(sec)
         root.addSpacing(14)
 
@@ -265,7 +278,7 @@ class TrangChuPage(QWidget):
         title_row = QHBoxLayout()
         self._section_title = QLabel("Danh Sách Kho")
         self._section_title.setFont(QFont(FONT, 15))
-        self._section_title.setStyleSheet("color: #bbb;")
+        self._section_title.setStyleSheet("color: #111;")
         title_row.addWidget(self._section_title)
         title_row.addStretch()
 
@@ -330,7 +343,7 @@ class TrangChuPage(QWidget):
                     or query in w.code.lower()
                     or query in (w.address or "").lower()]
             self.table.set_type_col_visible(self._active_type == "TONG")
-            self.table.load(data)
+            self.table.load(data, on_edit=self._edit_warehouse, on_delete=self._delete_warehouse)
             self.table.setVisible(True)
             self.item_table.setVisible(False)
         else:
@@ -339,7 +352,7 @@ class TrangChuPage(QWidget):
                     or query in i.name.lower()
                     or query in i.code.lower()
                     or query in i.unit_of_measure.lower()]
-            self.item_table.load(data)
+            self.item_table.load(data, on_edit=self._edit_item, on_delete=self._delete_item)
             self.item_table.setVisible(True)
             self.table.setVisible(False)
 

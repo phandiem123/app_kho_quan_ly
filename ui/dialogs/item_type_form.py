@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QLineEdit, QSpinBox, QTextEdit,
+    QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit,
     QPushButton, QMessageBox, QFrame,
 )
 from PyQt6.QtCore import Qt
@@ -72,6 +72,22 @@ class ItemTypeFormDialog(QDialog):
             QSpinBox::up-button, QSpinBox::down-button { width: 20px; }
         """)
 
+        self.f_price = QDoubleSpinBox()
+        self.f_price.setRange(0, 999_999_999_999)
+        self.f_price.setDecimals(0)
+        self.f_price.setValue(0)
+        self.f_price.setGroupSeparatorShown(True)
+        self.f_price.setFont(QFont(FONT, 12))
+        self.f_price.setFixedHeight(36)
+        self.f_price.setStyleSheet("""
+            QDoubleSpinBox {
+                border: 1px solid #ddd; border-radius: 6px;
+                padding: 0 10px; background: white;
+            }
+            QDoubleSpinBox:focus { border-color: #888; }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 20px; }
+        """)
+
         self.f_notes = QTextEdit()
         self.f_notes.setPlaceholderText("Ghi chú (tuỳ chọn)")
         self.f_notes.setFont(QFont(FONT, 12))
@@ -88,6 +104,7 @@ class ItemTypeFormDialog(QDialog):
         form.addRow(lbl("Tên Hàng *"), self.f_name)
         form.addRow(lbl("Đơn Vị Tính *"), self.f_unit)
         form.addRow(lbl("Niên Hạn (năm) *"), self.f_lifespan)
+        form.addRow(lbl("Đơn Giá"), self.f_price)
         form.addRow(lbl("Ghi Chú"), self.f_notes)
         root.addLayout(form)
 
@@ -96,6 +113,7 @@ class ItemTypeFormDialog(QDialog):
             self.f_name.setText(item.name)
             self.f_unit.setText(item.unit_of_measure)
             self.f_lifespan.setValue(max(1, round(item.total_lifespan_months / 12)))
+            self.f_price.setValue(item.unit_price)
             self.f_notes.setPlainText(item.notes)
 
         root.addSpacing(24)
@@ -163,7 +181,9 @@ class ItemTypeFormDialog(QDialog):
         item = ItemType(
             id=self._editing.id if self._editing else None,
             code=code, name=name, unit_of_measure=unit,
-            total_lifespan_months=lifespan, notes=notes,
+            total_lifespan_months=lifespan,
+            unit_price=self.f_price.value(),
+            notes=notes,
         )
         if self._editing:
             update(item)

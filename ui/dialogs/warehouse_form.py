@@ -99,7 +99,6 @@ class WarehouseFormDialog(QDialog):
 
         form.addRow(lbl("Mã Kho *"), self.f_code)
         form.addRow(lbl("Tên Kho *"), self.f_name)
-        form.addRow(lbl("Loại *"), self.f_type)
         form.addRow(lbl("Địa Chỉ"), self.f_address)
         form.addRow(lbl("Ghi Chú"), self.f_notes)
         root.addLayout(form)
@@ -112,7 +111,6 @@ class WarehouseFormDialog(QDialog):
         if warehouse:
             self.f_code.setText(warehouse.code)
             self.f_name.setText(warehouse.name)
-            self.f_type.setCurrentText(_TYPE_LABELS.get(warehouse.type, "Kho Tổng"))
             self.f_address.setText(warehouse.address)
             self.f_notes.setPlainText(warehouse.notes)
 

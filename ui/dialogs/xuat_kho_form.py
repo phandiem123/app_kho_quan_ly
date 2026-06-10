@@ -7,9 +7,7 @@ from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtGui import QFont, QCursor
 from database.item_types import get_all as item_get_all
 from database.warehouses import get_all as wh_get_all
-from database.receipts import (
-    Receipt, ReceiptLine, insert, update, ref_exists, get_lines,
-)
+from database.xuat_kho import Issue, IssueLine, insert, update, ref_exists, get_lines
 
 FONT = "Segoe UI"
 
@@ -20,7 +18,7 @@ _FIELD = """
     }
     QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QDateEdit:focus { border-color: #888; }
     QComboBox::drop-down { border: none; width: 24px; }
-    QDateEdit::drop-down { border: none; width: 24px; }
+    QDateEdit::drop-down  { border: none; width: 24px; }
 """
 _SPIN = """
     QSpinBox, QDoubleSpinBox {
@@ -33,23 +31,18 @@ _SPIN = """
 """
 
 _TITLES = {
-    "new":           "Nhập Hàng Mới",
-    "from_unit":     "Nhập Hàng Từ Đơn Vị Về",
-    "unit_return":   "Nhận Hàng Dùng Chung – Đơn Vị Trả",
-    "event_return":  "Nhận Hàng Dùng Chung – Sự Kiện Trả",
-    "shared_return": "Nhận Hàng Dùng Chung Về",  # backwards-compat
+    "to_unit":     "Xuất Kho Đi Đơn Vị",
+    "shared_loan": "Xuất Hàng Dùng Chung (Cho Mượn)",
 }
 
 
-class LineItemRow(QWidget):
+class IssueLineRow(QWidget):
     removed = pyqtSignal(object)
     value_changed = pyqtSignal()
 
-    def __init__(self, item_types, show_price: bool = True,
-                 show_quality: bool = False, parent=None):
+    def __init__(self, item_types, show_price: bool = True, parent=None):
         super().__init__(parent)
-        self._item_types = item_types
-        self._show_quality = show_quality
+        self._show_price = show_price
         self.setStyleSheet("background: transparent;")
 
         h = QHBoxLayout(self)
@@ -77,21 +70,6 @@ class LineItemRow(QWidget):
         self.spin_qty.setFixedWidth(80)
         self.spin_qty.setFixedHeight(34)
         self.spin_qty.setStyleSheet(_SPIN)
-
-        self.combo_quality = QComboBox()
-        self.combo_quality.setFixedHeight(34)
-        self.combo_quality.setFixedWidth(70)
-        self.combo_quality.setFont(QFont(FONT, 12))
-        for ql in ("H1", "H2", "H3", "H4"):
-            self.combo_quality.addItem(ql)
-        self.combo_quality.setStyleSheet("""
-            QComboBox { border: 1px solid #ddd; border-radius: 6px;
-                padding: 0 6px; background: white; font-size: 12px;
-                font-weight: 600; color: #111; }
-            QComboBox:focus { border-color: #888; }
-            QComboBox::drop-down { border: none; width: 18px; }
-        """)
-        self.combo_quality.setVisible(show_quality)
 
         self.spin_price = QDoubleSpinBox()
         self.spin_price.setRange(0, 999_999_999_999)
@@ -129,8 +107,6 @@ class LineItemRow(QWidget):
         h.addWidget(self.combo, 2)
         h.addWidget(self.lbl_unit)
         h.addWidget(self.spin_qty)
-        if show_quality:
-            h.addWidget(self.combo_quality)
         if show_price:
             h.addWidget(self.spin_price)
             h.addWidget(self.lbl_total)
@@ -156,11 +132,11 @@ class LineItemRow(QWidget):
         self.lbl_total.setText(f"{total:,.0f} đ" if total else "—")
         self.value_changed.emit()
 
-    def get_data(self) -> ReceiptLine | None:
+    def get_data(self) -> IssueLine | None:
         it = self.combo.currentData()
         if not it:
             return None
-        return ReceiptLine(
+        return IssueLine(
             item_type_id=it.id,
             item_code=it.code,
             item_name=it.name,
@@ -168,10 +144,9 @@ class LineItemRow(QWidget):
             quantity=self.spin_qty.value(),
             unit_price=self.spin_price.value(),
             notes=self.edit_notes.text().strip(),
-            quality_level=self.combo_quality.currentText() if self._show_quality else "H1",
         )
 
-    def fill(self, line: ReceiptLine):
+    def fill(self, line: IssueLine):
         for i in range(self.combo.count()):
             it = self.combo.itemData(i)
             if it and it.id == line.item_type_id:
@@ -180,25 +155,21 @@ class LineItemRow(QWidget):
         self.spin_qty.setValue(line.quantity)
         self.spin_price.setValue(line.unit_price)
         self.edit_notes.setText(line.notes)
-        if self._show_quality:
-            idx = self.combo_quality.findText(line.quality_level)
-            if idx >= 0:
-                self.combo_quality.setCurrentIndex(idx)
 
 
-class NhapKhoFormDialog(QDialog):
-    def __init__(self, parent=None, receipt: Receipt | None = None,
-                 subtype: str = "new"):
+class XuatKhoFormDialog(QDialog):
+    def __init__(self, parent=None, issue: Issue | None = None, subtype: str = "to_unit"):
         super().__init__(parent)
-        self._editing = receipt
-        self._subtype = receipt.subtype if receipt else subtype
+        self._editing  = issue
+        self._subtype  = issue.subtype if issue else subtype
         self._item_types = item_get_all()
-        warehouses = wh_get_all()
-        self._tong = [w for w in warehouses if w.type == "TONG"]
+        warehouses       = wh_get_all()
+        self._tong   = [w for w in warehouses if w.type == "TONG"]
         self._don_vi = [w for w in warehouses if w.type == "DON_VI"]
+        self._all_wh = warehouses
 
         title = _TITLES[self._subtype]
-        if receipt:
+        if issue:
             title = "Sửa – " + title
         self.setWindowTitle(title)
         self.setMinimumSize(1000, 700)
@@ -215,7 +186,6 @@ class NhapKhoFormDialog(QDialog):
         hdr.setStyleSheet("color: #111; margin-bottom: 20px;")
         root.addWidget(hdr)
 
-        # ── Fields ──────────────────────────────────────────────────────────
         def lbl(t):
             l = QLabel(t)
             l.setFont(QFont(FONT, 12))
@@ -232,19 +202,23 @@ class NhapKhoFormDialog(QDialog):
             e.setStyleSheet(_FIELD)
             return e
 
-        def combo_wh(warehouses):
+        def combo_wh(whs):
             c = QComboBox()
             c.setFont(QFont(FONT, 12))
             c.setFixedHeight(36)
             c.setMaximumWidth(280)
             c.setStyleSheet(_FIELD)
             c.addItem("— Chọn —", None)
-            for w in warehouses:
+            for w in whs:
                 c.addItem(f"{w.code} – {w.name}", w.id)
             return c
 
-        self.f_ref = fld("VD: QL-001", 260)
-        self.f_wh = combo_wh(self._tong)
+        self.f_ref       = fld("VD: XK-001", 260)
+        self.f_from_wh   = combo_wh(self._tong)
+        self.f_to_wh     = combo_wh(self._don_vi)
+        self.f_recipient = fld("Tên đơn vị / người nhận (nếu không có trong hệ thống)")
+        self.f_person    = fld("Tên người lập phiếu")
+        self.f_transport = fld("Phương tiện / đơn vị vận chuyển")
 
         self.f_date = QDateEdit(QDate.currentDate())
         self.f_date.setDisplayFormat("dd/MM/yyyy")
@@ -254,18 +228,8 @@ class NhapKhoFormDialog(QDialog):
         self.f_date.setFont(QFont(FONT, 12))
         self.f_date.setStyleSheet(_FIELD)
 
-        self.f_person = fld("Tên người giao")
-        ph_sup = "Đơn vị / công ty cung cấp" if self._subtype == "new" else "Tên sự kiện / nguồn"
-        self.f_supplier = fld(ph_sup)
-        self.f_transport = fld("Phương tiện / đơn vị vận chuyển")
-        self._from_label = {
-            "from_unit":   "Đơn Vị Giao *",
-            "unit_return": "Đơn Vị Trả *",
-        }.get(self._subtype, "")
-        self.f_from_wh = combo_wh(self._don_vi)
-
         self.f_notes = QTextEdit()
-        self.f_notes.setPlaceholderText("Nội dung nhập kho (tuỳ chọn)")
+        self.f_notes.setPlaceholderText("Nội dung xuất kho (tuỳ chọn)")
         self.f_notes.setFont(QFont(FONT, 12))
         self.f_notes.setFixedHeight(56)
         self.f_notes.setStyleSheet(_FIELD)
@@ -277,30 +241,24 @@ class NhapKhoFormDialog(QDialog):
         col_a.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         col_a.setSpacing(10)
         col_a.addRow(lbl("Số Phiếu *"), self.f_ref)
-        col_a.addRow(lbl("Kho Nhập *"), self.f_wh)
+        col_a.addRow(lbl("Kho Xuất *"), self.f_from_wh)
 
         col_b = QFormLayout()
         col_b.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         col_b.setSpacing(10)
-        if self._subtype == "new":
-            col_b.addRow(lbl("Đơn Vị Giao"), self.f_supplier)
-        elif self._subtype == "unit_return":
-            col_b.addRow(lbl("Đơn Vị Trả *"), self.f_from_wh)
-        elif self._subtype == "event_return":
-            col_b.addRow(lbl("Tên Sự Kiện"), self.f_supplier)
-        elif self._subtype == "shared_return":
-            col_b.addRow(lbl("Đơn Vị Trả"), self.f_from_wh)
-            col_b.addRow(lbl("Sự kiện"), self.f_supplier)
+        if self._subtype == "to_unit":
+            col_b.addRow(lbl("Đơn Vị Nhận"), self.f_to_wh)
+            col_b.addRow(lbl("Người Nhận"),  self.f_person)
         else:
-            col_b.addRow(lbl(self._from_label), self.f_from_wh)
-        col_b.addRow(lbl("Người giao"), self.f_person)
+            col_b.addRow(lbl("Đơn Vị Mượn"), self.f_to_wh)
+            col_b.addRow(lbl("Người Mượn"),   self.f_person)
 
         col_c = QFormLayout()
         col_c.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         col_c.setSpacing(10)
-        date_lbl = "Ngày Trả *" if self._subtype in ("unit_return", "event_return", "shared_return") else "Ngày Nhập *"
+        date_lbl = "Ngày Xuất *" if self._subtype == "to_unit" else "Ngày Mượn *"
         col_c.addRow(lbl(date_lbl), self.f_date)
-        if self._subtype == "new":
+        if self._subtype == "to_unit":
             col_c.addRow(lbl("Vận Chuyển"), self.f_transport)
 
         row1.addLayout(col_a, 1)
@@ -315,25 +273,20 @@ class NhapKhoFormDialog(QDialog):
         root.addLayout(notes_row)
         root.addSpacing(20)
 
-        # ── Line items ─────────────────────────────────────────────────────
-        sec = QLabel("Danh Sách Hàng Nhập")
+        sec = QLabel("Danh Sách Hàng Xuất")
         sec.setFont(QFont(FONT, 12, QFont.Weight.Bold))
         sec.setStyleSheet("color: #333;")
         root.addWidget(sec)
         root.addSpacing(6)
 
-        show_price   = (self._subtype == "new")
-        show_quality = (self._subtype == "from_unit")
+        show_price = (self._subtype == "to_unit")
 
-        # Column header strip
         hdr_w = QWidget()
         hdr_w.setStyleSheet("background: #f8f8f8; border-radius: 6px;")
         ch = QHBoxLayout(hdr_w)
         ch.setContentsMargins(6, 5, 6, 5)
         ch.setSpacing(6)
         col_defs = [("Mặt Hàng", 2, None), ("ĐVT", 0, 56), ("Số lượng", 0, 80)]
-        if show_quality:
-            col_defs += [("Mức HH", 0, 70)]
         if show_price:
             col_defs += [("Đơn Giá", 0, 120), ("Thành Tiền", 0, 120)]
         col_defs += [("Ghi chú", 1, None), ("", 0, 32)]
@@ -348,7 +301,6 @@ class NhapKhoFormDialog(QDialog):
                 ch.addWidget(l, stretch)
         root.addWidget(hdr_w)
 
-        # Rows container in scroll area
         self._rows_container = QWidget()
         self._rows_container.setStyleSheet("background: transparent;")
         self._rows_layout = QVBoxLayout(self._rows_container)
@@ -425,18 +377,14 @@ class NhapKhoFormDialog(QDialog):
         root.addLayout(btn_row)
 
         self._show_price = show_price
-        self._show_quality = show_quality
 
-        if receipt:
-            self._fill(receipt)
+        if issue:
+            self._fill(issue)
         else:
             self._add_line()
 
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _add_line(self, line: ReceiptLine | None = None):
-        row = LineItemRow(self._item_types, show_price=self._show_price,
-                          show_quality=self._show_quality, parent=self)
+    def _add_line(self, line: IssueLine | None = None):
+        row = IssueLineRow(self._item_types, show_price=self._show_price, parent=self)
         if line:
             row.fill(line)
         row.removed.connect(self._remove_line)
@@ -457,67 +405,38 @@ class NhapKhoFormDialog(QDialog):
         total = 0
         for i in range(self._rows_layout.count()):
             w = self._rows_layout.itemAt(i).widget()
-            if isinstance(w, LineItemRow):
+            if isinstance(w, IssueLineRow):
                 d = w.get_data()
                 if d:
                     total += d.quantity * d.unit_price
         self._form_total_lbl.setText(f"{total:,.0f} đ")
 
-    def _fill(self, receipt: Receipt):
-        self.f_ref.setText(receipt.reference_number)
-        _set_combo_by_data(self.f_wh, receipt.to_warehouse_id)
-        if self._subtype == "new":
-            self.f_supplier.setText(receipt.supplier)
-            self.f_transport.setText(receipt.transporter)
-        elif self._subtype == "unit_return":
-            _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
-        elif self._subtype == "event_return":
-            self.f_supplier.setText(receipt.supplier)
-        elif self._subtype == "shared_return":
-            _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
-            self.f_supplier.setText(receipt.supplier)
-        else:
-            _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
-        self.f_person.setText(receipt.created_by)
-        d = QDate.fromString(receipt.transaction_date, "yyyy-MM-dd")
+    def _fill(self, issue: Issue):
+        self.f_ref.setText(issue.reference_number)
+        _set_combo_by_data(self.f_from_wh, issue.from_warehouse_id)
+        _set_combo_by_data(self.f_to_wh, issue.to_warehouse_id)
+        self.f_person.setText(issue.created_by)
+        self.f_transport.setText(issue.transporter)
+        d = QDate.fromString(issue.transaction_date, "yyyy-MM-dd")
         if d.isValid():
             self.f_date.setDate(d)
-        self.f_notes.setPlainText(receipt.notes)
-        for line in get_lines(receipt.id):
+        self.f_notes.setPlainText(issue.notes)
+        for line in get_lines(issue.id):
             self._add_line(line)
 
     def _save(self):
         ref = self.f_ref.text().strip()
         if not ref:
             return self._err("Vui lòng nhập Số Phiếu.")
-        wh_id = self.f_wh.currentData()
-        if not wh_id:
-            return self._err("Vui lòng chọn Kho Nhập.")
+        from_wh_id = self.f_from_wh.currentData()
+        if not from_wh_id:
+            return self._err("Vui lòng chọn Kho Xuất.")
+        to_wh_id = self.f_to_wh.currentData()
 
-        from_wh_id = None
-        supplier = ""
-        transporter = ""
-        if self._subtype == "new":
-            supplier    = self.f_supplier.text().strip()
-            transporter = self.f_transport.text().strip()
-        elif self._subtype == "unit_return":
-            from_wh_id = self.f_from_wh.currentData()
-            if not from_wh_id:
-                return self._err("Vui lòng chọn Đơn Vị Trả.")
-        elif self._subtype == "event_return":
-            supplier = self.f_supplier.text().strip()
-        elif self._subtype == "shared_return":
-            from_wh_id = self.f_from_wh.currentData()
-            supplier   = self.f_supplier.text().strip()
-        else:
-            from_wh_id = self.f_from_wh.currentData()
-            if not from_wh_id:
-                return self._err("Vui lòng chọn Đơn Vị Giao.")
-
-        lines: list[ReceiptLine] = []
+        lines: list[IssueLine] = []
         for i in range(self._rows_layout.count()):
             w = self._rows_layout.itemAt(i).widget()
-            if isinstance(w, LineItemRow):
+            if isinstance(w, IssueLineRow):
                 d = w.get_data()
                 if d:
                     lines.append(d)
@@ -528,26 +447,26 @@ class NhapKhoFormDialog(QDialog):
         if ref_exists(ref, exclude):
             return self._err(f"Số Phiếu '{ref}' đã tồn tại.")
 
-        receipt = Receipt(
+        issue = Issue(
             id=self._editing.id if self._editing else None,
             reference_number=ref,
-            to_warehouse_id=wh_id,
-            to_warehouse_name="",
             from_warehouse_id=from_wh_id,
+            from_warehouse_name="",
+            to_warehouse_id=to_wh_id,
+            to_warehouse_name="",
             transaction_date=self.f_date.date().toString("yyyy-MM-dd"),
-            supplier=supplier,
+            tx_type="XUAT_KHO" if self._subtype == "to_unit" else "MUON",
+            recipient=self.f_recipient.text().strip(),
             created_by=self.f_person.text().strip(),
-            transporter=transporter,
+            transporter=self.f_transport.text().strip(),
             notes=self.f_notes.toPlainText().strip(),
             lines=lines,
         )
-        if self._subtype in ("unit_return", "event_return", "shared_return"):
-            receipt.tx_type = "TRA"
 
         if self._editing:
-            update(receipt)
+            update(issue)
         else:
-            insert(receipt)
+            insert(issue)
         self.accept()
 
     def _err(self, msg: str):
