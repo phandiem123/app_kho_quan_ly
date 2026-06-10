@@ -77,7 +77,7 @@ class Sidebar(QWidget):
         self.setFixedWidth(SIDEBAR_W)
         self.setStyleSheet("background: white;")
         self._items: dict[str, NavItem] = {}
-        self._active_key = "kho"
+        self._active_key = "trang_chu"
 
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 0, 8, 8)
@@ -90,11 +90,11 @@ class Sidebar(QWidget):
         v.addWidget(logo)
 
         # Trang Chủ
-        self._add_item(v, "", "Trang Chủ", "trang_chu")
+        self._add_item(v, "", "Trang Chủ", "trang_chu", active=True)
 
         # ── Thống Kê Tồn Kho ──
         v.addWidget(SectionHeader("Thống Kê Tồn Kho"))
-        self._add_item(v, "⌂", "Kho", "kho", active=True)
+        self._add_item(v, "⌂", "Kho", "kho")
         self._add_item(v, "◎", "Đơn Vị", "don_vi")
 
         # ── Phiếu Kho ──
