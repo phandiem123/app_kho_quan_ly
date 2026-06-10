@@ -201,16 +201,17 @@ class TrangChuPage(QWidget):
         root.addLayout(self._cards_row)
 
         root.addSpacing(32)
-
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.HLine)
         sep2.setStyleSheet("color: #eee;")
         root.addWidget(sep2)
 
         root.addSpacing(22)
-
         self.TABS = ["Kho", "Đơn Vị", "Hàng Hoá"]
         self.topbar = TopBar(self.TABS, active_tab=0)
+        root.addWidget(self.topbar)
+
+        root.addSpacing(22)
 
         # Danh sách kho section
         title_row = QHBoxLayout()

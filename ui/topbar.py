@@ -100,7 +100,6 @@ class TopBar(QWidget):
         h.addWidget(self.search)
 
         # Bell
-        bell = QPushButton("🔔")
         bell.setFlat(True)
         bell.setFixedSize(36, 36)
         bell.setFont(QFont(FONT, 15))
