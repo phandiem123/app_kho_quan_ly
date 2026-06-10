@@ -10,7 +10,6 @@ from PyQt6.QtGui import QFont
 import database
 from ui.sidebar import Sidebar
 from ui.pages.trang_chu import TrangChuPage
-from ui.pages.danh_sach_kho import DanhSachKhoPage
 
 FONT = "Segoe UI"
 
@@ -51,11 +50,7 @@ class MainWindow(QMainWindow):
 
         # Đăng ký trang
         self._pages: dict[str, int] = {}
-        self._trang_chu = TrangChuPage()
-        self._kho_page  = DanhSachKhoPage()
-
-        self._add_page("trang_chu", self._trang_chu)
-        self._add_page("kho",       self._kho_page)
+        self._add_page("trang_chu", TrangChuPage())
 
         # Mặc định hiển thị Trang Chủ
         self.stack.setCurrentIndex(self._pages["trang_chu"])
@@ -64,14 +59,27 @@ class MainWindow(QMainWindow):
         idx = self.stack.addWidget(widget)
         self._pages[key] = idx
 
+    # Factory dict: key → callable trả về QWidget, import xảy ra lúc gọi
+    _LAZY: "dict[str, Callable[[], QWidget]]" = {}
+
     def _on_nav(self, key: str):
         if key not in self._pages:
-            return
-        # Refresh trang trước khi hiển thị
+            factory = self._LAZY.get(key)
+            if factory is None:
+                return
+            self._add_page(key, factory())
         page = self.stack.widget(self._pages[key])
         if hasattr(page, "refresh"):
             page.refresh()
         self.stack.setCurrentIndex(self._pages[key])
+
+
+def _register_lazy_pages():
+    from ui.pages.danh_sach_kho import DanhSachKhoPage
+    MainWindow._LAZY["kho"] = DanhSachKhoPage
+
+
+_register_lazy_pages()
 
 
 def main():
