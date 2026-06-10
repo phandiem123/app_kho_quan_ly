@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QHBoxLayout, QFrame, QStackedWidget, QScrollArea,
 )
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 import database
 from ui.sidebar import Sidebar
@@ -60,6 +61,8 @@ class MainWindow(QMainWindow):
         scroll.setWidget(widget)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         idx = self.stack.addWidget(scroll)
         self._pages[key] = idx

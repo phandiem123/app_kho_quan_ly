@@ -2,6 +2,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import database
 
+# subtype → transaction type in DB
+_TX = {
+    "new":           "NHAP_KHO",
+    "from_unit":     "NHAP_KHO",
+    "shared_return": "TRA",
+}
+# subtype → quality level for items
+_QUALITY = {
+    "new":           "H1",
+    "from_unit":     "H4",
+    "shared_return": "H1",
+}
+
 
 @dataclass
 class ReceiptLine:
@@ -22,6 +35,9 @@ class Receipt:
     to_warehouse_id: int
     to_warehouse_name: str
     transaction_date: str
+    tx_type: str = "NHAP_KHO"
+    from_warehouse_id: int | None = None
+    from_warehouse_name: str = ""
     supplier: str = ""
     created_by: str = ""
     transporter: str = ""
@@ -29,22 +45,41 @@ class Receipt:
     line_count: int = 0
     lines: list[ReceiptLine] = field(default_factory=list)
 
+    @property
+    def subtype(self) -> str:
+        if self.tx_type == "TRA":
+            return "shared_return"
+        if self.from_warehouse_id:
+            return "from_unit"
+        return "new"
 
-def get_all(year: int | None = None) -> list[Receipt]:
+
+def get_all(year: int | None = None, subtype: str = "new") -> list[Receipt]:
     conn = database.get_conn()
-    where = "WHERE t.type = 'NHAP_KHO'"
+    tx_type = _TX[subtype]
+    clauses = [f"t.type = '{tx_type}'"]
     params: list = []
+
+    if subtype == "new":
+        clauses.append("t.from_warehouse_id IS NULL")
+    elif subtype == "from_unit":
+        clauses.append("t.from_warehouse_id IS NOT NULL")
+
     if year:
-        where += " AND strftime('%Y', t.transaction_date) = ?"
+        clauses.append("strftime('%Y', t.transaction_date) = ?")
         params.append(str(year))
+
+    where = "WHERE " + " AND ".join(clauses)
     rows = conn.execute(f"""
-        SELECT t.id, t.reference_number, t.to_warehouse_id,
-               w.name AS warehouse_name,
+        SELECT t.id, t.type AS tx_type, t.reference_number,
+               t.to_warehouse_id,  wto.name AS to_warehouse_name,
+               t.from_warehouse_id, wfrom.name AS from_warehouse_name,
                t.transaction_date, t.supplier, t.created_by,
                t.transporter, t.notes,
                COUNT(tl.id) AS line_count
         FROM transactions t
-        LEFT JOIN warehouses w ON w.id = t.to_warehouse_id
+        LEFT JOIN warehouses wto   ON wto.id  = t.to_warehouse_id
+        LEFT JOIN warehouses wfrom ON wfrom.id = t.from_warehouse_id
         LEFT JOIN transaction_lines tl ON tl.transaction_id = t.id
         {where}
         GROUP BY t.id
@@ -53,9 +88,12 @@ def get_all(year: int | None = None) -> list[Receipt]:
     return [
         Receipt(
             id=r["id"],
+            tx_type=r["tx_type"],
             reference_number=r["reference_number"] or "",
             to_warehouse_id=r["to_warehouse_id"] or 0,
-            to_warehouse_name=r["warehouse_name"] or "",
+            to_warehouse_name=r["to_warehouse_name"] or "",
+            from_warehouse_id=r["from_warehouse_id"],
+            from_warehouse_name=r["from_warehouse_name"] or "",
             transaction_date=r["transaction_date"] or "",
             supplier=r["supplier"] or "",
             created_by=r["created_by"] or "",
@@ -93,101 +131,167 @@ def get_lines(transaction_id: int) -> list[ReceiptLine]:
     ]
 
 
+def _upsert_inv(conn, wh_id, item_type_id, quality, qty, is_shared=0):
+    row = conn.execute("""
+        SELECT id FROM inventory
+        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
+          AND received_at_unit_date IS NULL AND is_shared=?
+        LIMIT 1
+    """, (wh_id, item_type_id, quality, is_shared)).fetchone()
+    if row:
+        conn.execute("UPDATE inventory SET quantity=quantity+? WHERE id=?",
+                     (qty, row["id"]))
+    else:
+        conn.execute("""
+            INSERT INTO inventory (warehouse_id, item_type_id, quality_level, quantity, is_shared)
+            VALUES (?, ?, ?, ?, ?)
+        """, (wh_id, item_type_id, quality, qty, is_shared))
+
+
 def insert(receipt: Receipt) -> int:
     conn = database.get_conn()
+    subtype = receipt.subtype
+    quality = _QUALITY[subtype]
     cur = conn.execute("""
         INSERT INTO transactions
-            (type, reference_number, to_warehouse_id, transaction_date,
-             supplier, created_by, transporter, notes)
-        VALUES ('NHAP_KHO', ?, ?, ?, ?, ?, ?, ?)
-    """, (receipt.reference_number, receipt.to_warehouse_id,
+            (type, reference_number, from_warehouse_id, to_warehouse_id,
+             transaction_date, supplier, created_by, transporter, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (_TX[subtype], receipt.reference_number,
+          receipt.from_warehouse_id, receipt.to_warehouse_id,
           receipt.transaction_date, receipt.supplier,
           receipt.created_by, receipt.transporter, receipt.notes))
     tx_id = cur.lastrowid
+
     for line in receipt.lines:
         conn.execute("""
             INSERT INTO transaction_lines
                 (transaction_id, item_type_id, quality_level_from,
                  quality_level_to, quantity, unit_price, notes)
-            VALUES (?, ?, NULL, 'H1', ?, ?, ?)
-        """, (tx_id, line.item_type_id, line.quantity, line.unit_price, line.notes))
-        existing = conn.execute("""
-            SELECT id FROM inventory
-            WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
-              AND received_at_unit_date IS NULL
-            LIMIT 1
-        """, (receipt.to_warehouse_id, line.item_type_id)).fetchone()
-        if existing:
-            conn.execute("UPDATE inventory SET quantity=quantity+? WHERE id=?",
-                         (line.quantity, existing["id"]))
-        else:
+            VALUES (?, ?, NULL, ?, ?, ?, ?)
+        """, (tx_id, line.item_type_id, quality,
+              line.quantity, line.unit_price, line.notes))
+        if subtype == "new":
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity)
+        elif subtype == "from_unit" and receipt.from_warehouse_id:
             conn.execute("""
-                INSERT INTO inventory (warehouse_id, item_type_id, quality_level, quantity)
-                VALUES (?, ?, 'H1', ?)
-            """, (receipt.to_warehouse_id, line.item_type_id, line.quantity))
+                UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level='H4'
+            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id))
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H4", line.quantity)
+        elif subtype == "shared_return" and receipt.from_warehouse_id:
+            conn.execute("""
+                UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
+            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id))
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity, is_shared=1)
+
     conn.commit()
     return tx_id
 
 
 def update(receipt: Receipt) -> None:
     conn = database.get_conn()
-    old_wh = conn.execute(
-        "SELECT to_warehouse_id FROM transactions WHERE id=?", (receipt.id,)
+    old = conn.execute(
+        "SELECT to_warehouse_id, from_warehouse_id, type FROM transactions WHERE id=?",
+        (receipt.id,)
     ).fetchone()
-    old_wh_id = old_wh["to_warehouse_id"] if old_wh else None
-    for line in get_lines(receipt.id):
-        if old_wh_id:
-            conn.execute("""
-                UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
-                  AND received_at_unit_date IS NULL
-            """, (line.quantity, old_wh_id, line.item_type_id))
+    old_subtype = receipt.subtype
+    if old:
+        old_tx = old["type"]
+        if old_tx == "TRA":
+            old_subtype = "shared_return"
+        elif old["from_warehouse_id"]:
+            old_subtype = "from_unit"
+        else:
+            old_subtype = "new"
+        old_quality = _QUALITY[old_subtype]
+        for line in get_lines(receipt.id):
+            if old_subtype == "new":
+                conn.execute("""
+                    UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                    WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
+                      AND received_at_unit_date IS NULL
+                """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
+            elif old_subtype == "from_unit" and old["from_warehouse_id"]:
+                conn.execute("""
+                    UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                    WHERE warehouse_id=? AND item_type_id=? AND quality_level='H4'
+                """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
+            elif old_subtype == "shared_return" and old["from_warehouse_id"]:
+                conn.execute("""
+                    UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                    WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
+                """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
+
+    subtype = receipt.subtype
     conn.execute("""
         UPDATE transactions SET
-            reference_number=?, to_warehouse_id=?, transaction_date=?,
-            supplier=?, created_by=?, transporter=?, notes=?
+            type=?, reference_number=?, from_warehouse_id=?, to_warehouse_id=?,
+            transaction_date=?, supplier=?, created_by=?, transporter=?, notes=?
         WHERE id=?
-    """, (receipt.reference_number, receipt.to_warehouse_id,
+    """, (_TX[subtype], receipt.reference_number,
+          receipt.from_warehouse_id, receipt.to_warehouse_id,
           receipt.transaction_date, receipt.supplier,
           receipt.created_by, receipt.transporter, receipt.notes, receipt.id))
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (receipt.id,))
+    quality = _QUALITY[subtype]
     for line in receipt.lines:
         conn.execute("""
             INSERT INTO transaction_lines
                 (transaction_id, item_type_id, quality_level_from,
                  quality_level_to, quantity, unit_price, notes)
-            VALUES (?, ?, NULL, 'H1', ?, ?, ?)
-        """, (receipt.id, line.item_type_id, line.quantity, line.unit_price, line.notes))
-        existing = conn.execute("""
-            SELECT id FROM inventory
-            WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
-              AND received_at_unit_date IS NULL
-            LIMIT 1
-        """, (receipt.to_warehouse_id, line.item_type_id)).fetchone()
-        if existing:
-            conn.execute("UPDATE inventory SET quantity=quantity+? WHERE id=?",
-                         (line.quantity, existing["id"]))
-        else:
+            VALUES (?, ?, NULL, ?, ?, ?, ?)
+        """, (receipt.id, line.item_type_id, quality,
+              line.quantity, line.unit_price, line.notes))
+        if subtype == "new":
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity)
+        elif subtype == "from_unit" and receipt.from_warehouse_id:
             conn.execute("""
-                INSERT INTO inventory (warehouse_id, item_type_id, quality_level, quantity)
-                VALUES (?, ?, 'H1', ?)
-            """, (receipt.to_warehouse_id, line.item_type_id, line.quantity))
+                UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level='H4'
+            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id))
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H4", line.quantity)
+        elif subtype == "shared_return" and receipt.from_warehouse_id:
+            conn.execute("""
+                UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
+            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id))
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity, is_shared=1)
     conn.commit()
 
 
 def delete(receipt_id: int) -> None:
     conn = database.get_conn()
-    old_wh = conn.execute(
-        "SELECT to_warehouse_id FROM transactions WHERE id=?", (receipt_id,)
+    old = conn.execute(
+        "SELECT to_warehouse_id, from_warehouse_id, type FROM transactions WHERE id=?",
+        (receipt_id,)
     ).fetchone()
-    old_wh_id = old_wh["to_warehouse_id"] if old_wh else None
-    for line in get_lines(receipt_id):
-        if old_wh_id:
-            conn.execute("""
-                UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
-                  AND received_at_unit_date IS NULL
-            """, (line.quantity, old_wh_id, line.item_type_id))
+    if old:
+        tx = old["type"]
+        if tx == "TRA":
+            subtype = "shared_return"
+        elif old["from_warehouse_id"]:
+            subtype = "from_unit"
+        else:
+            subtype = "new"
+        for line in get_lines(receipt_id):
+            if subtype == "new":
+                conn.execute("""
+                    UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                    WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
+                      AND received_at_unit_date IS NULL
+                """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
+            elif subtype == "from_unit":
+                conn.execute("""
+                    UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                    WHERE warehouse_id=? AND item_type_id=? AND quality_level='H4'
+                """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
+            elif subtype == "shared_return":
+                conn.execute("""
+                    UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                    WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
+                """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (receipt_id,))
     conn.execute("DELETE FROM transactions WHERE id=?", (receipt_id,))
     conn.commit()
@@ -197,12 +301,11 @@ def ref_exists(ref: str, exclude_id: int | None = None) -> bool:
     conn = database.get_conn()
     if exclude_id:
         row = conn.execute(
-            "SELECT 1 FROM transactions WHERE reference_number=? AND type='NHAP_KHO' AND id!=?",
+            "SELECT 1 FROM transactions WHERE reference_number=? AND id!=?",
             (ref, exclude_id)
         ).fetchone()
     else:
         row = conn.execute(
-            "SELECT 1 FROM transactions WHERE reference_number=? AND type='NHAP_KHO'",
-            (ref,)
+            "SELECT 1 FROM transactions WHERE reference_number=?", (ref,)
         ).fetchone()
     return row is not None

@@ -41,8 +41,8 @@ class NavItem(QWidget):
     def _refresh(self):
         if self._active:
             self.setStyleSheet("""
-                NavItem { background: #111; border-radius: 8px; }
-                NavItem QLabel { color: white; }
+                NavItem { background: #ebebeb; border-radius: 8px; }
+                NavItem QLabel { color: #111; }
             """)
         else:
             self.setStyleSheet("""
@@ -106,17 +106,8 @@ class Sidebar(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("""
-            QScrollArea { border: none; background: transparent; }
-            QScrollBar:vertical {
-                width: 4px; background: transparent;
-                margin: 0; border-radius: 2px;
-            }
-            QScrollBar::handle:vertical {
-                background: #ddd; border-radius: 2px; min-height: 20px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        """)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         nav_widget = QWidget()
         nav_widget.setStyleSheet("background: white;")
@@ -129,6 +120,7 @@ class Sidebar(QWidget):
         v.addWidget(SectionHeader("Thống Kê Tồn Kho"))
         self._add_item(v, "⌂", "Kho", "kho")
         self._add_item(v, "◎", "Đơn Vị", "don_vi")
+        self._add_item(v, "◈", "Hàng Dùng Chung", "txl_chung")
 
         v.addWidget(SectionHeader("Phiếu Kho"))
         self._add_item(v, "↙", "Nhập Kho", "nhap_kho")
@@ -138,7 +130,6 @@ class Sidebar(QWidget):
         v.addWidget(SectionHeader("Thanh Xử Lý"))
         self._add_item(v, "⌂", "Tại Kho", "txl_kho")
         self._add_item(v, "◎", "Tại Đơn Vị", "txl_don_vi")
-        self._add_item(v, "◈", "Hàng Dùng Chung", "txl_chung")
 
         v.addStretch()
         scroll.setWidget(nav_widget)
