@@ -10,56 +10,52 @@ class TabBar(QWidget):
 
     def __init__(self, tabs: list[str], active: int = 0):
         super().__init__()
+        self.setFixedHeight(36)
+        self.setStyleSheet("background: #f0f0f0; border-radius: 9px;")
+
         h = QHBoxLayout(self)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(0)
+        h.setContentsMargins(3, 3, 3, 3)
+        h.setSpacing(2)
 
         self._buttons: list[QPushButton] = []
-        n = len(tabs)
 
         for i, text in enumerate(tabs):
             btn = QPushButton(text)
             btn.setFont(QFont(FONT, 12))
-            btn.setFixedHeight(32)
+            btn.setFixedHeight(30)
             btn.setCheckable(True)
             btn.setChecked(i == active)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-
-            if n == 1:
-                radius = "border-radius: 6px;"
-            elif i == 0:
-                radius = "border-radius: 6px 0 0 6px;"
-            elif i == n - 1:
-                radius = "border-radius: 0 6px 6px 0; border-left: none;"
-            else:
-                radius = "border-radius: 0; border-left: none;"
-
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    border: 1px solid #d0d0d0;
-                    background: white;
-                    padding: 0 18px;
-                    color: #333;
-                    {radius}
-                }}
-                QPushButton:checked {{
-                    font-weight: 600;
-                    color: #111;
-                    background: white;
-                }}
-                QPushButton:hover:!checked {{
-                    background: #f6f6f6;
-                }}
-            """)
+            self._apply_style(btn, i == active)
             h.addWidget(btn)
             self._buttons.append(btn)
 
             idx = i
-            btn.clicked.connect(lambda _checked, i=idx: self._select(i))
+            btn.clicked.connect(lambda _, i=idx: self._select(i))
+
+    def _apply_style(self, btn: QPushButton, active: bool):
+        if active:
+            btn.setStyleSheet("""
+                QPushButton {
+                    border: none; border-radius: 7px; padding: 0 18px;
+                    font-size: 13px; font-weight: 600;
+                    background: #111; color: white;
+                }
+                QPushButton:hover { background: #222; }
+            """)
+        else:
+            btn.setStyleSheet("""
+                QPushButton {
+                    border: none; border-radius: 7px; padding: 0 18px;
+                    font-size: 13px; font-weight: normal;
+                    background: transparent; color: #666;
+                }
+                QPushButton:hover { background: #e3e3e3; color: #111; }
+            """)
 
     def _select(self, index: int):
         for i, btn in enumerate(self._buttons):
-            btn.setChecked(i == index)
+            self._apply_style(btn, i == index)
         self.tab_changed.emit(index)
 
 
@@ -99,10 +95,11 @@ class TopBar(QWidget):
         """)
         h.addWidget(self.search)
 
-        # Bell
-        bell.setFlat(True)
-        bell.setFixedSize(36, 36)
-        bell.setFont(QFont(FONT, 15))
-        bell.setStyleSheet("background: transparent; border: none;")
-        bell.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        h.addWidget(bell)
+        # # Bell
+        # bell = QPushButton("🔔")
+        # bell.setFlat(True)
+        # bell.setFixedSize(36, 36)
+        # bell.setFont(QFont(FONT, 15))
+        # bell.setStyleSheet("background: transparent; border: none;")
+        # bell.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        # h.addWidget(bell)

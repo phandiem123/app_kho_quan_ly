@@ -1,26 +1,20 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QLineEdit, QComboBox, QTextEdit,
+    QLabel, QLineEdit, QSpinBox, QTextEdit,
     QPushButton, QMessageBox, QFrame,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
-from database.warehouses import Warehouse, code_exists, insert, update
+from database.item_types import ItemType, code_exists, insert, update
 
 FONT = "Segoe UI"
 
-_TYPE_LABELS = {"TONG": "Kho Tổng", "DON_VI": "Đơn Vị"}
-_LABEL_TYPES = {v: k for k, v in _TYPE_LABELS.items()}
 
-
-class WarehouseFormDialog(QDialog):
-    """Dialog Thêm hoặc Sửa kho/đơn vị."""
-
-    def __init__(self, parent=None, warehouse: Warehouse | None = None,
-                 default_type: str | None = None):
+class ItemTypeFormDialog(QDialog):
+    def __init__(self, parent=None, item: ItemType | None = None):
         super().__init__(parent)
-        self._editing = warehouse
-        title = "Sửa Kho" if warehouse else "Thêm Kho"
+        self._editing = item
+        title = "Sửa Hàng Hoá" if item else "Thêm Hàng Hoá"
         self.setWindowTitle(title)
         self.setFixedWidth(480)
         self.setModal(True)
@@ -30,13 +24,11 @@ class WarehouseFormDialog(QDialog):
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(0)
 
-        # Header
         hdr = QLabel(title)
         hdr.setFont(QFont(FONT, 16, QFont.Weight.Bold))
         hdr.setStyleSheet("color: #111; margin-bottom: 20px;")
         root.addWidget(hdr)
 
-        # Form
         form = QFormLayout()
         form.setSpacing(14)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -54,34 +46,31 @@ class WarehouseFormDialog(QDialog):
             e.setFixedHeight(36)
             e.setStyleSheet("""
                 QLineEdit {
-                    border: 1px solid #ddd;
-                    border-radius: 6px;
-                    padding: 0 10px;
-                    background: white;
+                    border: 1px solid #ddd; border-radius: 6px;
+                    padding: 0 10px; background: white;
                 }
                 QLineEdit:focus { border-color: #888; }
             """)
             return e
 
-        self.f_code = field("VD: D6, KT01")
-        self.f_name = field("Tên đầy đủ của kho")
+        self.f_code = field("VD: AK47, PKN01")
+        self.f_name = field("Tên đầy đủ của hàng hoá")
+        self.f_unit = field("VD: cái, bộ, chiếc, hộp")
 
-        self.f_type = QComboBox()
-        self.f_type.addItems(list(_TYPE_LABELS.values()))
-        self.f_type.setFont(QFont(FONT, 12))
-        self.f_type.setFixedHeight(36)
-        self.f_type.setStyleSheet("""
-            QComboBox {
-                border: 1px solid #ddd;
-                border-radius: 6px;
-                padding: 0 10px;
-                background: white;
+        self.f_lifespan = QSpinBox()
+        self.f_lifespan.setRange(1, 600)
+        self.f_lifespan.setValue(12)
+        self.f_lifespan.setSuffix(" tháng")
+        self.f_lifespan.setFont(QFont(FONT, 12))
+        self.f_lifespan.setFixedHeight(36)
+        self.f_lifespan.setStyleSheet("""
+            QSpinBox {
+                border: 1px solid #ddd; border-radius: 6px;
+                padding: 0 10px; background: white;
             }
-            QComboBox:focus { border-color: #888; }
-            QComboBox::drop-down { border: none; }
+            QSpinBox:focus { border-color: #888; }
+            QSpinBox::up-button, QSpinBox::down-button { width: 20px; }
         """)
-
-        self.f_address = field("Địa chỉ")
 
         self.f_notes = QTextEdit()
         self.f_notes.setPlaceholderText("Ghi chú (tuỳ chọn)")
@@ -89,43 +78,34 @@ class WarehouseFormDialog(QDialog):
         self.f_notes.setFixedHeight(72)
         self.f_notes.setStyleSheet("""
             QTextEdit {
-                border: 1px solid #ddd;
-                border-radius: 6px;
-                padding: 6px 10px;
-                background: white;
+                border: 1px solid #ddd; border-radius: 6px;
+                padding: 6px 10px; background: white;
             }
             QTextEdit:focus { border-color: #888; }
         """)
 
-        form.addRow(lbl("Mã Kho *"), self.f_code)
-        form.addRow(lbl("Tên Kho *"), self.f_name)
-        form.addRow(lbl("Loại *"), self.f_type)
-        form.addRow(lbl("Địa Chỉ"), self.f_address)
+        form.addRow(lbl("Mã Hàng *"), self.f_code)
+        form.addRow(lbl("Tên Hàng *"), self.f_name)
+        form.addRow(lbl("Đơn Vị Tính *"), self.f_unit)
+        form.addRow(lbl("Niên Hạn Tổng *"), self.f_lifespan)
         form.addRow(lbl("Ghi Chú"), self.f_notes)
         root.addLayout(form)
 
-        # Pre-select type when adding from a specific tab
-        if not warehouse and default_type and default_type in _TYPE_LABELS:
-            self.f_type.setCurrentText(_TYPE_LABELS[default_type])
-
-        # Fill existing data when editing
-        if warehouse:
-            self.f_code.setText(warehouse.code)
-            self.f_name.setText(warehouse.name)
-            self.f_type.setCurrentText(_TYPE_LABELS.get(warehouse.type, "Kho Tổng"))
-            self.f_address.setText(warehouse.address)
-            self.f_notes.setPlainText(warehouse.notes)
+        if item:
+            self.f_code.setText(item.code)
+            self.f_name.setText(item.name)
+            self.f_unit.setText(item.unit_of_measure)
+            self.f_lifespan.setValue(item.total_lifespan_months)
+            self.f_notes.setPlainText(item.notes)
 
         root.addSpacing(24)
 
-        # Divider
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setStyleSheet("color: #eee;")
         root.addWidget(line)
         root.addSpacing(16)
 
-        # Buttons
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
@@ -134,11 +114,8 @@ class WarehouseFormDialog(QDialog):
         btn_cancel.setFont(QFont(FONT, 12))
         btn_cancel.setStyleSheet("""
             QPushButton {
-                border: 1px solid #ddd;
-                border-radius: 6px;
-                padding: 0 20px;
-                background: white;
-                color: #555;
+                border: 1px solid #ddd; border-radius: 6px;
+                padding: 0 20px; background: white; color: #555;
             }
             QPushButton:hover { background: #f5f5f5; }
         """)
@@ -149,11 +126,8 @@ class WarehouseFormDialog(QDialog):
         btn_save.setFont(QFont(FONT, 12, QFont.Weight.Bold))
         btn_save.setStyleSheet("""
             QPushButton {
-                border: none;
-                border-radius: 6px;
-                padding: 0 24px;
-                background: #111;
-                color: white;
+                border: none; border-radius: 6px; padding: 0 24px;
+                background: #111; color: white;
             }
             QPushButton:hover { background: #333; }
         """)
@@ -167,32 +141,34 @@ class WarehouseFormDialog(QDialog):
     def _save(self):
         code = self.f_code.text().strip()
         name = self.f_name.text().strip()
-        wh_type = _LABEL_TYPES[self.f_type.currentText()]
-        address = self.f_address.text().strip()
+        unit = self.f_unit.text().strip()
+        lifespan = self.f_lifespan.value()
         notes = self.f_notes.toPlainText().strip()
 
         if not code:
-            self._err("Vui lòng nhập Mã Kho.")
+            self._err("Vui lòng nhập Mã Hàng.")
             return
         if not name:
-            self._err("Vui lòng nhập Tên Kho.")
+            self._err("Vui lòng nhập Tên Hàng.")
+            return
+        if not unit:
+            self._err("Vui lòng nhập Đơn Vị Tính.")
             return
 
         exclude_id = self._editing.id if self._editing else None
         if code_exists(code, exclude_id):
-            self._err(f"Mã Kho '{code}' đã tồn tại.")
+            self._err(f"Mã Hàng '{code}' đã tồn tại.")
             return
 
-        wh = Warehouse(
+        item = ItemType(
             id=self._editing.id if self._editing else None,
-            code=code, name=name, type=wh_type,
-            address=address, notes=notes,
+            code=code, name=name, unit_of_measure=unit,
+            total_lifespan_months=lifespan, notes=notes,
         )
         if self._editing:
-            update(wh)
+            update(item)
         else:
-            insert(wh)
-
+            insert(item)
         self.accept()
 
     def _err(self, msg: str):

@@ -14,11 +14,17 @@ class Warehouse:
     id: int | None = None
 
 
-def get_all(active_only: bool = True) -> list[Warehouse]:
+def get_all(active_only: bool = True, wh_type: str | None = None) -> list[Warehouse]:
     conn = database.get_conn()
-    where = "WHERE is_active = 1" if active_only else ""
+    clauses, params = [], []
+    if active_only:
+        clauses.append("is_active = 1")
+    if wh_type:
+        clauses.append("type = ?")
+        params.append(wh_type)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
-        f"SELECT * FROM warehouses {where} ORDER BY type, name"
+        f"SELECT * FROM warehouses {where} ORDER BY type, name", params
     ).fetchall()
     return [
         Warehouse(
@@ -93,7 +99,7 @@ def get_stats() -> dict:
         "SELECT COALESCE(SUM(quantity),0) FROM inventory WHERE quality_level='H4'"
     ).fetchone()[0]
     item_types = conn.execute(
-        "SELECT COUNT(DISTINCT item_type_id) FROM inventory WHERE quantity > 0"
+        "SELECT COUNT(*) FROM item_types WHERE is_active=1"
     ).fetchone()[0]
     return {
         "kho_tong": kho_tong,
