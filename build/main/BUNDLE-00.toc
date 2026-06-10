@@ -1,1 +1,0 @@
-([('main', '/Users/diem.phan/app/app_kho_quan_ly/dist/main', 'EXECUTABLE')],)
