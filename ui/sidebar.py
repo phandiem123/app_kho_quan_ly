@@ -1,4 +1,7 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy,
+    QScrollArea, QFrame,
+)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QCursor
 
@@ -17,7 +20,6 @@ class NavItem(QWidget):
         self.setMinimumHeight(40)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
-        from PyQt6.QtWidgets import QHBoxLayout
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 6, 12, 6)
         row.setSpacing(10)
@@ -27,13 +29,11 @@ class NavItem(QWidget):
             ico.setFixedWidth(22)
             ico.setAlignment(Qt.AlignmentFlag.AlignCenter)
             ico.setFont(QFont(FONT, 13))
-            ico.setStyleSheet("color: #444;")
             row.addWidget(ico)
 
         lbl = QLabel(text)
         lbl.setFont(QFont(FONT, 12))
         lbl.setWordWrap(True)
-        lbl.setStyleSheet("color: #1a1a1a;")
         row.addWidget(lbl, 1)
 
         self._refresh()
@@ -72,55 +72,77 @@ class SectionHeader(QLabel):
     def __init__(self, text: str):
         super().__init__(text)
         self.setFont(QFont(FONT, 10, QFont.Weight.Bold))
-        self.setStyleSheet("color: #111; padding: 14px 12px 4px 12px;")
+        self.setStyleSheet("color: #999; padding: 14px 12px 4px 12px;")
 
 
 class Sidebar(QWidget):
     nav_changed = pyqtSignal(str)
 
-    _NAV_ITEMS: list[tuple[str, str, str]] = [
-        # (icon, label, key)
-        ("", "Trang Chủ", "trang_chu"),
-    ]
-
     def __init__(self):
         super().__init__()
         self.setFixedWidth(SIDEBAR_W)
-        self.setStyleSheet("background: white;")
+        self.setStyleSheet("Sidebar { background: white; }")
         self._items: dict[str, NavItem] = {}
         self._active_key = "trang_chu"
 
-        v = QVBoxLayout(self)
-        v.setContentsMargins(8, 0, 8, 8)
-        v.setSpacing(1)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # Logo
+        # Logo — always visible, not scrollable
         logo = QLabel("DCCD")
         logo.setFont(QFont(FONT, 30, QFont.Weight.Black))
-        logo.setStyleSheet("color: #111; padding: 22px 12px 14px 12px;")
-        v.addWidget(logo)
+        logo.setStyleSheet("color: #111; padding: 22px 12px 14px 12px; background: white;")
+        outer.addWidget(logo)
 
-        # Trang Chủ
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background: #f0f0f0; border: none;")
+        outer.addWidget(sep)
+
+        # Scrollable nav area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QScrollBar:vertical {
+                width: 4px; background: transparent;
+                margin: 0; border-radius: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: #ddd; border-radius: 2px; min-height: 20px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        """)
+
+        nav_widget = QWidget()
+        nav_widget.setStyleSheet("background: white;")
+        v = QVBoxLayout(nav_widget)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(1)
+
         self._add_item(v, "", "Trang Chủ", "trang_chu", active=True)
 
-        # ── Thống Kê Tồn Kho ──
         v.addWidget(SectionHeader("Thống Kê Tồn Kho"))
         self._add_item(v, "⌂", "Kho", "kho")
         self._add_item(v, "◎", "Đơn Vị", "don_vi")
 
-        # ── Phiếu Kho ──
         v.addWidget(SectionHeader("Phiếu Kho"))
         self._add_item(v, "↙", "Nhập Kho", "nhap_kho")
         self._add_item(v, "↗", "Xuất Kho", "xuat_kho")
-        self._add_item(v, "⇄", "Luân Chuyển Đơn Vị", "luan_chuyen")
+        self._add_item(v, "⇄", "Luân Chuyển", "luan_chuyen")
 
-        # ── Thanh Xử Lý ──
         v.addWidget(SectionHeader("Thanh Xử Lý"))
-        self._add_item(v, "⌂", "Thanh Xử Lý Tại Kho", "txl_kho")
-        self._add_item(v, "◎", "Thanh Xử Lý Tại Đơn Vị", "txl_don_vi")
-        self._add_item(v, "◈", "Thanh Xử Lý Hàng Dùng Chung", "txl_chung")
+        self._add_item(v, "⌂", "Tại Kho", "txl_kho")
+        self._add_item(v, "◎", "Tại Đơn Vị", "txl_don_vi")
+        self._add_item(v, "◈", "Hàng Dùng Chung", "txl_chung")
 
         v.addStretch()
+        scroll.setWidget(nav_widget)
+        outer.addWidget(scroll, 1)
 
     def _add_item(self, layout: QVBoxLayout, icon: str, text: str, key: str, active: bool = False):
         item = NavItem(icon, text, key, active)

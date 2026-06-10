@@ -4,7 +4,7 @@
 import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
-    QHBoxLayout, QFrame, QStackedWidget,
+    QHBoxLayout, QFrame, QStackedWidget, QScrollArea,
 )
 from PyQt6.QtGui import QFont
 import database
@@ -56,7 +56,12 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(self._pages["trang_chu"])
 
     def _add_page(self, key: str, widget: QWidget):
-        idx = self.stack.addWidget(widget)
+        scroll = QScrollArea()
+        scroll.setWidget(widget)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        idx = self.stack.addWidget(scroll)
         self._pages[key] = idx
 
     # Factory dict: key → callable trả về QWidget, import xảy ra lúc gọi
@@ -76,7 +81,9 @@ class MainWindow(QMainWindow):
 
 def _register_lazy_pages():
     from ui.pages.danh_sach_kho import DanhSachKhoPage
+    from ui.pages.nhap_kho import NhapKhoPage
     MainWindow._LAZY["kho"] = DanhSachKhoPage
+    MainWindow._LAZY["nhap_kho"] = NhapKhoPage
 
 
 _register_lazy_pages()

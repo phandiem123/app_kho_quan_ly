@@ -16,12 +16,26 @@ def get_conn() -> sqlite3.Connection:
         _conn.execute("PRAGMA foreign_keys = ON")
         _conn.execute("PRAGMA journal_mode = WAL")
         _init_schema()
+        _migrate()
     return _conn
 
 
 def _init_schema():
     sql = _SCHEMA.read_text(encoding="utf-8")
     _conn.executescript(sql)
+    _conn.commit()
+
+
+def _migrate():
+    for sql in [
+        "ALTER TABLE transactions ADD COLUMN supplier TEXT",
+        "ALTER TABLE transactions ADD COLUMN transporter TEXT",
+        "ALTER TABLE transaction_lines ADD COLUMN unit_price REAL NOT NULL DEFAULT 0",
+    ]:
+        try:
+            _conn.execute(sql)
+        except Exception:
+            pass
     _conn.commit()
 
 
