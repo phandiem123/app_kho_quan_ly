@@ -139,6 +139,9 @@ class KhoTable(QTableWidget):
         self.setColumnWidth(2, 100)
         self.setColumnWidth(3, 100)
 
+    def set_type_col_visible(self, visible: bool):
+        self.setColumnHidden(3, not visible)
+
     def load(self, warehouses: list[Warehouse]):
         self.setRowCount(0)
         for i, wh in enumerate(warehouses):
@@ -326,6 +329,7 @@ class TrangChuPage(QWidget):
                     or query in w.name.lower()
                     or query in w.code.lower()
                     or query in (w.address or "").lower()]
+            self.table.set_type_col_visible(self._active_type == "TONG")
             self.table.load(data)
             self.table.setVisible(True)
             self.item_table.setVisible(False)
