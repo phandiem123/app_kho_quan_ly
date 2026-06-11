@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QPushButton, QLineEdit, QComboBox, QCompleter,
+    QDialog,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QCursor, QColor
@@ -33,6 +34,163 @@ _BADGE = {
     "H3": ("H3", "#e65100", "#fff3e0"),
     "H4": ("H4", "#c0392b", "#fdecea"),
 }
+
+
+def _apply_inv_qty(wh_id: int, item_type_id: int, quality_level: str, new_qty: int):
+    """Overwrite the total inventory quantity for (wh, item, ql).
+    If multiple rows exist, keeps the first and zeros the rest.
+    """
+    conn = database.get_conn()
+    rows = conn.execute("""
+        SELECT id FROM inventory
+        WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=0
+        ORDER BY received_at_unit_date NULLS FIRST, id
+    """, (wh_id, item_type_id, quality_level)).fetchall()
+    if not rows:
+        if new_qty > 0:
+            conn.execute("""
+                INSERT INTO inventory (warehouse_id, item_type_id, quality_level, quantity, is_shared)
+                VALUES (?, ?, ?, ?, 0)
+            """, (wh_id, item_type_id, quality_level, new_qty))
+    else:
+        conn.execute("UPDATE inventory SET quantity=? WHERE id=?", (new_qty, rows[0]["id"]))
+        for r in rows[1:]:
+            conn.execute("UPDATE inventory SET quantity=0 WHERE id=?", (r["id"],))
+    conn.commit()
+
+
+# ── Edit-quantity dialog ───────────────────────────────────────────────────────
+
+class _EditQtyDialog(QDialog):
+    _QL_STYLE = {
+        "H1": ("#1a7a4a", "#e6f4ed"),
+        "H2": ("#1565c0", "#e3f0fb"),
+        "H3": ("#e65100", "#fff3e0"),
+        "H4": ("#c0392b", "#fdecea"),
+    }
+
+    def __init__(self, item_name: str, ql: str, current: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sửa số lượng")
+        self.setModal(True)
+        self.setFixedWidth(380)
+        self._result: int | None = None
+        self._build(item_name, ql, current)
+
+    def _build(self, item_name: str, ql: str, current: int):
+        self.setStyleSheet("QDialog { background: white; }")
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 24, 28, 22)
+        root.setSpacing(0)
+
+        # ── Header ──────────────────────────────────────────────────────────
+        title = QLabel("Sửa số lượng tồn kho")
+        title.setFont(QFont(FONT, 14, QFont.Weight.Bold))
+        title.setStyleSheet("color: #111;")
+        root.addWidget(title)
+        root.addSpacing(5)
+
+        sub = QLabel(item_name)
+        sub.setFont(QFont(FONT, 11))
+        sub.setStyleSheet("color: #888;")
+        sub.setWordWrap(True)
+        root.addWidget(sub)
+
+        root.addSpacing(18)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("QFrame { color: #f0f0f0; }")
+        root.addWidget(sep)
+        root.addSpacing(20)
+
+        # ── QL badge + input ─────────────────────────────────────────────────
+        fg, bg = self._QL_STYLE.get(ql, ("#111", "#f0f0f0"))
+        row = QHBoxLayout()
+        row.setSpacing(14)
+
+        badge = QLabel(ql)
+        badge.setFixedSize(52, 52)
+        badge.setFont(QFont(FONT, 15, QFont.Weight.Bold))
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setStyleSheet(f"background: {bg}; color: {fg}; border-radius: 11px;")
+        row.addWidget(badge)
+
+        inp_col = QVBoxLayout()
+        inp_col.setSpacing(5)
+        inp_lbl = QLabel("Số lượng mới")
+        inp_lbl.setFont(QFont(FONT, 10))
+        inp_lbl.setStyleSheet("color: #aaa;")
+        inp_col.addWidget(inp_lbl)
+
+        self._inp = QLineEdit(str(current))
+        self._inp.setFont(QFont(FONT, 18, QFont.Weight.Bold))
+        self._inp.setFixedHeight(46)
+        self._inp.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._inp.setStyleSheet("""
+            QLineEdit {
+                border: 2px solid #e0e0e0; border-radius: 10px;
+                background: #fafafa; color: #111; padding: 0 12px;
+            }
+            QLineEdit:focus { border-color: #111; background: white; }
+        """)
+        self._inp.selectAll()
+        self._inp.returnPressed.connect(self._on_save)
+        inp_col.addWidget(self._inp)
+
+        row.addLayout(inp_col, 1)
+        root.addLayout(row)
+        root.addSpacing(24)
+
+        # ── Buttons ──────────────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
+        cancel = QPushButton("Hủy")
+        cancel.setFixedHeight(40)
+        cancel.setFont(QFont(FONT, 12))
+        cancel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        cancel.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #e0e0e0; border-radius: 9px;
+                background: white; color: #555;
+            }
+            QPushButton:hover { background: #f5f5f5; }
+        """)
+        cancel.clicked.connect(self.reject)
+
+        save = QPushButton("Lưu")
+        save.setFixedHeight(40)
+        save.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        save.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        save.setStyleSheet("""
+            QPushButton {
+                border: none; border-radius: 9px;
+                background: #111; color: white;
+            }
+            QPushButton:hover { background: #333; }
+            QPushButton:pressed { background: #000; }
+        """)
+        save.clicked.connect(self._on_save)
+
+        btn_row.addWidget(cancel)
+        btn_row.addWidget(save)
+        root.addLayout(btn_row)
+
+    def _on_save(self):
+        text = self._inp.text().strip()
+        if not text.isdigit():
+            self._inp.setStyleSheet("""
+                QLineEdit {
+                    border: 2px solid #e53935; border-radius: 10px;
+                    background: #fff5f5; color: #111; padding: 0 12px;
+                }
+            """)
+            return
+        self._result = int(text)
+        self.accept()
+
+    def result_value(self) -> int | None:
+        return self._result
 
 
 # ── Summary cards ─────────────────────────────────────────────────────────────
@@ -573,6 +731,7 @@ class ThongKeKhoPage(QWidget):
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setStyleSheet(_TABLE_STYLE)
+        self._table.cellDoubleClicked.connect(self._on_cell_dblclick)
 
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
@@ -942,6 +1101,33 @@ class ThongKeKhoPage(QWidget):
                     cell.setToolTip(tip)
                 self._table.setItem(ri, c, cell)
 
+            # Store edit key on H1-H4 cells so double-click knows what to update
+            wh_id = r["wh_id"] if search_mode else self._active_wh_id
+            h_start = 7 if search_mode else 6
+            for qi, ql in enumerate(("H1", "H2", "H3", "H4")):
+                item = self._table.item(ri, h_start + qi)
+                if item:
+                    item.setData(Qt.ItemDataRole.UserRole,
+                                 (wh_id, r["item_type_id"], ql, r["item_name"]))
+
+    def _on_cell_dblclick(self, row: int, col: int):
+        item = self._table.item(row, col)
+        if item is None:
+            return
+        key = item.data(Qt.ItemDataRole.UserRole)
+        if key is None:
+            return
+        wh_id, item_type_id, ql, item_name = key
+        current = int(item.text()) if item.text().isdigit() else 0
+        dlg = _EditQtyDialog(item_name, ql, current, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_val = dlg.result_value()
+        if new_val is None or new_val == current:
+            return
+        _apply_inv_qty(wh_id, item_type_id, ql, new_val)
+        self.refresh()
+
 
 # ── Per-unit tab page ─────────────────────────────────────────────────────────
 
@@ -1071,6 +1257,7 @@ class ThongKeDonViPage(QWidget):
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setStyleSheet(_TABLE_STYLE)
+        self._table.cellDoubleClicked.connect(self._on_cell_dblclick)
 
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
@@ -1443,3 +1630,30 @@ class ThongKeDonViPage(QWidget):
                 if tip:
                     cell.setToolTip(tip)
                 self._table.setItem(ri, c, cell)
+
+            # Store edit key on H1-H4 cells so double-click knows what to update
+            wh_id = r["wh_id"] if search_mode else self._active_wh_id
+            h_start = 7 if search_mode else 6
+            for qi, ql in enumerate(("H1", "H2", "H3", "H4")):
+                item = self._table.item(ri, h_start + qi)
+                if item:
+                    item.setData(Qt.ItemDataRole.UserRole,
+                                 (wh_id, r["item_type_id"], ql, r["item_name"]))
+
+    def _on_cell_dblclick(self, row: int, col: int):
+        item = self._table.item(row, col)
+        if item is None:
+            return
+        key = item.data(Qt.ItemDataRole.UserRole)
+        if key is None:
+            return
+        wh_id, item_type_id, ql, item_name = key
+        current = int(item.text()) if item.text().isdigit() else 0
+        dlg = _EditQtyDialog(item_name, ql, current, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_val = dlg.result_value()
+        if new_val is None or new_val == current:
+            return
+        _apply_inv_qty(wh_id, item_type_id, ql, new_val)
+        self.refresh()
