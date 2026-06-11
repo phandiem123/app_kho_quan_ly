@@ -16,7 +16,7 @@ FONT = "Segoe UI"
 _TABLE_STYLE = """
     QTableWidget { border: none; background: white; outline: 0; gridline-color: transparent; }
     QHeaderView::section {
-        background: white; color: #aaa; font-size: 12px;
+        background: white; color: #111; font-size: 12px;
         border: none; border-bottom: 1px solid #efefef;
         padding: 8px 12px; font-weight: normal;
     }
@@ -51,7 +51,7 @@ class _SummaryCard(QFrame):
 
         lbl = QLabel(label)
         lbl.setFont(QFont(FONT, 11))
-        lbl.setStyleSheet("color: #888;")
+        lbl.setStyleSheet("color: #111;")
         v.addWidget(lbl)
 
         val = QLabel(value)
@@ -472,6 +472,8 @@ class ThongKeKhoPage(QWidget):
 
     _COLS = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
              "H1", "H2", "H3", "H4", "Tổng"]
+    _COLS_SEARCH = ["STT", "Kho", "Mã Hàng", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
+                    "H1", "H2", "H3", "H4", "Tổng"]
 
     def __init__(self):
         super().__init__()
@@ -480,6 +482,9 @@ class ThongKeKhoPage(QWidget):
         self._active_wh_id: int | None = None
         self._raw: list = []
         self._year_map: dict = {}
+        self._search_raw: list = []
+        self._search_year_map: dict = {}
+        self._was_searching: bool = False
         self._tab_btns: dict[int, QPushButton] = {}
         self._build_ui()
 
@@ -496,7 +501,7 @@ class ThongKeKhoPage(QWidget):
         top.addStretch()
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Tìm mã / tên hàng...")
+        self._search.setPlaceholderText("Tìm kiếm toàn kho")
         self._search.setFixedSize(260, 34)
         self._search.setFont(QFont(FONT, 12))
         self._search.setStyleSheet("""
@@ -509,17 +514,23 @@ class ThongKeKhoPage(QWidget):
         root.addLayout(top)
         root.addSpacing(16)
 
-        # ── Scrollable tab bar ─────────────────────────────────────────────
-        tab_scroll = QFrame()
-        tab_scroll.setFixedHeight(44)
-        tab_scroll.setStyleSheet("QFrame { border: none; background: transparent; }")
-        tab_h = QHBoxLayout(tab_scroll)
+        # ── Tab bar — hidden while searching ──────────────────────────────
+        self._tab_row = QWidget()
+        self._tab_row.setStyleSheet("background: transparent;")
+        tab_row_v = QVBoxLayout(self._tab_row)
+        tab_row_v.setContentsMargins(0, 0, 0, 16)
+        tab_row_v.setSpacing(0)
+
+        tab_frame = QFrame()
+        tab_frame.setFixedHeight(44)
+        tab_frame.setStyleSheet("QFrame { border: none; background: transparent; }")
+        tab_h = QHBoxLayout(tab_frame)
         tab_h.setContentsMargins(0, 4, 0, 4)
         tab_h.setSpacing(6)
         self._tab_layout = tab_h
         self._tab_layout.addStretch()
-        root.addWidget(tab_scroll)
-        root.addSpacing(16)
+        tab_row_v.addWidget(tab_frame)
+        root.addWidget(self._tab_row)
 
         # ── Summary cards ──────────────────────────────────────────────────
         card_h = QHBoxLayout()
@@ -531,6 +542,20 @@ class ThongKeKhoPage(QWidget):
             self._cards[key] = c
             card_h.addWidget(c)
         card_h.addStretch()
+
+        _search_style = """
+            QLineEdit { border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 12px; background: white; color: #111; }
+            QLineEdit:focus { border-color: #bbb; }
+        """
+        self._local_search = QLineEdit()
+        self._local_search.setPlaceholderText("Tìm trong kho này...")
+        self._local_search.setFixedSize(220, 34)
+        self._local_search.setFont(QFont(FONT, 12))
+        self._local_search.setStyleSheet(_search_style)
+        self._local_search.textChanged.connect(self._apply_local_filter)
+        card_h.addWidget(self._local_search)
+
         root.addLayout(card_h)
         root.addSpacing(16)
 
@@ -554,24 +579,6 @@ class ThongKeKhoPage(QWidget):
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setStyleSheet(_TABLE_STYLE)
 
-        h = self._table.horizontalHeader()
-        for i, (mode, w) in enumerate([
-            (QHeaderView.ResizeMode.Fixed, 52),
-            (QHeaderView.ResizeMode.Fixed, 100),
-            (QHeaderView.ResizeMode.Stretch, None),
-            (QHeaderView.ResizeMode.Fixed, 56),
-            (QHeaderView.ResizeMode.Fixed, 110),
-            (QHeaderView.ResizeMode.Fixed, 120),
-            (QHeaderView.ResizeMode.Fixed, 72),
-            (QHeaderView.ResizeMode.Fixed, 72),
-            (QHeaderView.ResizeMode.Fixed, 72),
-            (QHeaderView.ResizeMode.Fixed, 72),
-            (QHeaderView.ResizeMode.Fixed, 80),
-        ]):
-            h.setSectionResizeMode(i, mode)
-            if w:
-                self._table.setColumnWidth(i, w)
-
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
 
@@ -586,8 +593,7 @@ class ThongKeKhoPage(QWidget):
         self._tab_btns.clear()
 
         for r in self._wh_list:
-            prefix = "Kho" if r["type"] == "TONG" else "ĐV"
-            btn = QPushButton(f"{prefix}: {r['code']}")
+            btn = QPushButton(r["code"])
             btn.setFont(QFont(FONT, 11))
             btn.setFixedHeight(32)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -614,16 +620,62 @@ class ThongKeKhoPage(QWidget):
             else:
                 btn.setStyleSheet("""
                     QPushButton { border: 1px solid #e0e0e0; border-radius: 7px; padding: 0 14px;
-                        background: white; color: #555; font-size: 11px; }
+                        background: white; color: #111; font-size: 11px; }
                     QPushButton:hover { background: #f5f5f5; color: #111; }
                 """)
 
+    def _configure_table(self, search_mode: bool):
+        cols = self._COLS_SEARCH if search_mode else self._COLS
+        self._table.setColumnCount(len(cols))
+        self._table.setHorizontalHeaderLabels(cols)
+        h = self._table.horizontalHeader()
+        specs = (
+            [
+                (QHeaderView.ResizeMode.Fixed, 52),
+                (QHeaderView.ResizeMode.Fixed, 100),
+                (QHeaderView.ResizeMode.Fixed, 100),
+                (QHeaderView.ResizeMode.Stretch, None),
+                (QHeaderView.ResizeMode.Fixed, 56),
+                (QHeaderView.ResizeMode.Fixed, 110),
+                (QHeaderView.ResizeMode.Fixed, 120),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 80),
+            ] if search_mode else [
+                (QHeaderView.ResizeMode.Fixed, 52),
+                (QHeaderView.ResizeMode.Fixed, 100),
+                (QHeaderView.ResizeMode.Stretch, None),
+                (QHeaderView.ResizeMode.Fixed, 56),
+                (QHeaderView.ResizeMode.Fixed, 110),
+                (QHeaderView.ResizeMode.Fixed, 120),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 80),
+            ]
+        )
+        for i, (mode, w) in enumerate(specs):
+            h.setSectionResizeMode(i, mode)
+            if w:
+                self._table.setColumnWidth(i, w)
+
     # ── Data ──────────────────────────────────────────────────────────────────
 
+    def switch_to(self, wh_id: int):
+        self._active_wh_id = wh_id
+        self.refresh()
+
     def refresh(self):
+        self._search_raw = []
+        self._was_searching = False
+        self._tab_row.setVisible(True)
+        self._configure_table(search_mode=False)
         conn = database.get_conn()
         rows = conn.execute(
-            "SELECT id, code, name, type FROM warehouses WHERE is_active=1 ORDER BY type, name"
+            "SELECT id, code, name, type FROM warehouses WHERE is_active=1 AND type='TONG' ORDER BY name"
         ).fetchall()
         self._wh_list = rows
         known_ids = {r["id"] for r in rows}
@@ -703,6 +755,74 @@ class ThongKeKhoPage(QWidget):
         self._update_cards(rows)
         self._apply_filter()
 
+    def _load_search_data(self):
+        conn = database.get_conn()
+        year = str(datetime.date.today().year)
+        self._search_raw = conn.execute("""
+            SELECT w.id AS wh_id, w.code AS wh_code, w.name AS wh_name,
+                   t.id AS item_type_id,
+                   t.code AS item_code, t.name AS item_name,
+                   t.unit_of_measure,
+                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
+                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
+                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
+                   SUM(i.quantity) AS total,
+                   MAX(CASE
+                       WHEN i.received_at_unit_date IS NOT NULL
+                       THEN CAST(
+                           (julianday(date('now','localtime'))
+                            - julianday(i.received_at_unit_date)) / 30.44 AS INTEGER)
+                       ELSE NULL
+                   END) AS max_months,
+                   (SELECT tl2.unit_price
+                    FROM transaction_lines tl2
+                    JOIN transactions tx2 ON tx2.id = tl2.transaction_id
+                    WHERE tl2.item_type_id = t.id
+                      AND tx2.to_warehouse_id = w.id
+                      AND COALESCE(tl2.unit_price, 0) > 0
+                    ORDER BY tx2.transaction_date DESC, tl2.id DESC
+                    LIMIT 1) AS don_gia
+            FROM inventory i
+            JOIN warehouses w ON w.id = i.warehouse_id
+            JOIN item_types t ON t.id = i.item_type_id
+            WHERE i.is_shared = 0 AND i.quantity > 0
+              AND w.type = 'TONG' AND w.is_active = 1
+            GROUP BY w.id, t.id
+            ORDER BY t.name, w.name
+        """).fetchall()
+
+        yr_rows = conn.execute("""
+            SELECT sub.wh_id, sub.item_type_id, sub.ql,
+                   SUM(sub.nhap) AS nhap, SUM(sub.xuat) AS xuat
+            FROM (
+                SELECT tx.to_warehouse_id AS wh_id,
+                       tl.item_type_id, tl.quality_level_to AS ql,
+                       tl.quantity AS nhap, 0 AS xuat
+                FROM transaction_lines tl
+                JOIN transactions tx ON tx.id = tl.transaction_id
+                JOIN warehouses w ON w.id = tx.to_warehouse_id
+                WHERE w.type = 'TONG' AND w.is_active = 1
+                  AND strftime('%Y', tx.transaction_date) = ?
+                  AND tl.quality_level_to IS NOT NULL
+                UNION ALL
+                SELECT tx.from_warehouse_id AS wh_id,
+                       tl.item_type_id, tl.quality_level_from AS ql,
+                       0 AS nhap, tl.quantity AS xuat
+                FROM transaction_lines tl
+                JOIN transactions tx ON tx.id = tl.transaction_id
+                JOIN warehouses w ON w.id = tx.from_warehouse_id
+                WHERE w.type = 'TONG' AND w.is_active = 1
+                  AND strftime('%Y', tx.transaction_date) = ?
+                  AND tl.quality_level_from IS NOT NULL
+            ) sub
+            GROUP BY sub.wh_id, sub.item_type_id, sub.ql
+        """, (year, year)).fetchall()
+        self._search_year_map = {
+            (r["wh_id"], r["item_type_id"], r["ql"]): (r["nhap"], r["xuat"])
+            for r in yr_rows
+        }
+
     def _update_cards(self, rows):
         self._cards["total"].set_value(str(sum(r["total"] for r in rows)))
         for ql in ("h1", "h2", "h3", "h4"):
@@ -710,13 +830,38 @@ class ThongKeKhoPage(QWidget):
 
     def _apply_filter(self):
         q = self._search.text().strip().lower()
-        data = self._raw if not q else [
+        is_searching = bool(q)
+
+        if is_searching and not self._was_searching:
+            self._load_search_data()
+            self._configure_table(search_mode=True)
+            self._tab_row.setVisible(False)
+            self._local_search.setVisible(False)
+            self._local_search.clear()
+        elif not is_searching and self._was_searching:
+            self._configure_table(search_mode=False)
+            self._tab_row.setVisible(True)
+            self._local_search.setVisible(True)
+
+        self._was_searching = is_searching
+
+        if is_searching:
+            rows = [r for r in self._search_raw
+                    if q in r["item_name"].lower() or q in r["item_code"].lower()
+                    or q in r["wh_name"].lower() or q in r["wh_code"].lower()]
+            self._load_table(rows, search_mode=True)
+        else:
+            self._apply_local_filter()
+
+    def _apply_local_filter(self):
+        q = self._local_search.text().strip().lower()
+        rows = self._raw if not q else [
             r for r in self._raw
             if q in r["item_name"].lower() or q in r["item_code"].lower()
         ]
-        self._load_table(data)
+        self._load_table(rows, search_mode=False)
 
-    def _load_table(self, rows):
+    def _load_table(self, rows, search_mode: bool = False):
         self._table.setRowCount(0)
         for i, r in enumerate(rows):
             ri = self._table.rowCount()
@@ -733,29 +878,63 @@ class ThongKeKhoPage(QWidget):
             tid = r["item_type_id"]
 
             def _tip(ql: str, current: int) -> str:
-                nhap, xuat = self._year_map.get((tid, ql), (0, 0))
+                if search_mode:
+                    nhap, xuat = self._search_year_map.get((r["wh_id"], tid, ql), (0, 0))
+                else:
+                    nhap, xuat = self._year_map.get((tid, ql), (0, 0))
                 so_du = current - nhap + xuat
-                con_lai = so_du + nhap - xuat
+
+                def _row(label, val, last=False):
+                    sep = "" if last else "border-bottom: 1px solid #ebebeb;"
+                    return (
+                        f'<tr>'
+                        f'<td style="padding: 9px 28px 9px 0; color: #111; {sep}">{label}</td>'
+                        f'<td style="padding: 9px 0; color: #111; font-weight: 600; text-align: right; {sep}">{val}</td>'
+                        f'</tr>'
+                    )
+
                 return (
-                    f"Số dư đầu năm: {so_du}\n"
-                    f"Tổng nhập trong năm: {nhap}\n"
-                    f"Tổng xuất trong năm: {xuat}\n"
-                    f"Còn lại: {con_lai}"
+                    '<table style="font-family: \'Segoe UI\'; font-size: 13px;'
+                    ' min-width: 230px; border-spacing: 0;">'
+                    '<tr><td colspan="2" style="padding: 0 0 10px 0;">'
+                    '<b style="font-size: 14px; color: #111;">Thông tin Chi tiết</b>'
+                    '</td></tr>'
+                    + _row("Số dư đầu năm", so_du)
+                    + _row("Tổng nhập", nhap)
+                    + _row("Tổng xuất", xuat)
+                    + _row("Hiện tại", current, last=True)
+                    + '</table>'
                 )
 
-            cells = [
-                (str(i + 1),           True,  False, None),
-                (r["item_code"],       False, False, None),
-                (r["item_name"],       False, False, None),
-                (r["unit_of_measure"], True,  False, None),
-                (nien_han,             True,  nien_han_red, None),
-                (don_gia,              True,  False, None),
-                (str(r["h1"]),         True,  False, _tip("H1", r["h1"])),
-                (str(r["h2"]),         True,  False, _tip("H2", r["h2"])),
-                (str(r["h3"]),         True,  False, _tip("H3", r["h3"])),
-                (str(r["h4"]),         True,  r["h4"] > 0, _tip("H4", r["h4"])),
-                (str(r["total"]),      True,  False, None),
-            ]
+            if search_mode:
+                cells = [
+                    (str(i + 1),           True,  False, None),
+                    (r["wh_code"],         True,  False, None),
+                    (r["item_code"],       False, False, None),
+                    (r["item_name"],       False, False, None),
+                    (r["unit_of_measure"], True,  False, None),
+                    (nien_han,             True,  nien_han_red, None),
+                    (don_gia,              True,  False, None),
+                    (str(r["h1"]),         True,  False, _tip("H1", r["h1"])),
+                    (str(r["h2"]),         True,  False, _tip("H2", r["h2"])),
+                    (str(r["h3"]),         True,  False, _tip("H3", r["h3"])),
+                    (str(r["h4"]),         True,  r["h4"] > 0, _tip("H4", r["h4"])),
+                    (str(r["total"]),      True,  False, None),
+                ]
+            else:
+                cells = [
+                    (str(i + 1),           True,  False, None),
+                    (r["item_code"],       False, False, None),
+                    (r["item_name"],       False, False, None),
+                    (r["unit_of_measure"], True,  False, None),
+                    (nien_han,             True,  nien_han_red, None),
+                    (don_gia,              True,  False, None),
+                    (str(r["h1"]),         True,  False, _tip("H1", r["h1"])),
+                    (str(r["h2"]),         True,  False, _tip("H2", r["h2"])),
+                    (str(r["h3"]),         True,  False, _tip("H3", r["h3"])),
+                    (str(r["h4"]),         True,  r["h4"] > 0, _tip("H4", r["h4"])),
+                    (str(r["total"]),      True,  False, None),
+                ]
 
             for c, (val, center, red, tip) in enumerate(cells):
                 cell = QTableWidgetItem(val)

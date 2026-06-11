@@ -5,6 +5,7 @@ import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QHBoxLayout, QFrame, QStackedWidget, QScrollArea,
+    QProxyStyle, QStyle,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -13,6 +14,13 @@ from ui.sidebar import Sidebar
 from ui.pages.trang_chu import TrangChuPage
 
 FONT = "Segoe UI"
+
+
+class _FastTipStyle(QProxyStyle):
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.StyleHint.SH_ToolTip_WakeUpDelay:
+            return 200
+        return super().styleHint(hint, option, widget, returnData)
 
 
 class MainWindow(QMainWindow):
@@ -108,8 +116,19 @@ def main():
     database.get_conn()
 
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    app.setStyle(_FastTipStyle("Fusion"))
     app.setFont(QFont(FONT, 12))
+    app.setStyleSheet("""
+        QToolTip {
+            background: white;
+            color: #111;
+            border: 1px solid #ddd;
+            border-radius: 12px;
+            padding: 14px 18px;
+            font-family: "Segoe UI";
+            font-size: 13px;
+        }
+    """)
 
     window = MainWindow()
     window.show()
