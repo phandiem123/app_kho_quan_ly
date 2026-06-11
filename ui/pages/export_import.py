@@ -3,7 +3,7 @@
 from __future__ import annotations
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QFileDialog, QMessageBox,
+    QFrame, QFileDialog, QMessageBox, QSizePolicy,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -72,6 +72,8 @@ class _Card(QFrame):
         d.setFont(QFont(FONT, 11))
         d.setStyleSheet("color: #666; border: none;")
         d.setWordWrap(True)
+        d.setMinimumWidth(1)
+        d.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         v.addWidget(d)
 
         row = QHBoxLayout()
@@ -178,14 +180,20 @@ class ExportImportPage(QWidget):
             secondary_label="Tải Mẫu", secondary_cb=self._template_issues,
             tertiary_label="Xuất Excel", tertiary_cb=self._export_issues,
         ))
-        import_row2.addWidget(_Card(
+        import_row2.addStretch()
+        v.addLayout(import_row2)
+
+        import_row3 = QHBoxLayout()
+        import_row3.setSpacing(16)
+        import_row3.addWidget(_Card(
             "Phiếu Luân Chuyển",
             "Nhập hàng loạt phiếu luân chuyển từ Excel. Mỗi dòng là một mặt hàng trong phiếu.",
             "Nhập từ Excel", self._import_transfers,
             secondary_label="Tải Mẫu", secondary_cb=self._template_transfers,
             tertiary_label="Xuất Excel", tertiary_cb=self._export_transfers,
         ))
-        v.addLayout(import_row2)
+        import_row3.addStretch()
+        v.addLayout(import_row3)
 
         v.addStretch()
 
