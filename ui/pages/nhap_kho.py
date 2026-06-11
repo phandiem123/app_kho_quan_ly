@@ -134,7 +134,7 @@ class DetailPanel(QWidget):
 
         show_price   = (receipt.subtype == "new")
         show_quality = (receipt.subtype == "from_unit")
-        sub_cols = ["STT", "Mã hàng", "Tên Hàng", "ĐVT", "Số lượng"]
+        sub_cols = ["STT", "Tên Hàng", "ĐVT", "Số lượng"]
         if show_quality:
             sub_cols.append("Mức HH")
         if show_price:
@@ -162,7 +162,6 @@ class DetailPanel(QWidget):
         sh = self._sub.horizontalHeader()
         modes = [
             (QHeaderView.ResizeMode.Fixed, 44),
-            (QHeaderView.ResizeMode.Fixed, 88),
             (QHeaderView.ResizeMode.Stretch, None),
             (QHeaderView.ResizeMode.Fixed, 72),
             (QHeaderView.ResizeMode.Fixed, 84),
@@ -199,8 +198,8 @@ class DetailPanel(QWidget):
 
     def _load_lines(self, lines: list[ReceiptLine], show_price: bool, show_quality: bool = False):
         self._sub.setRowCount(0)
-        center_cols = {0, 4}
-        col_offset = 5
+        center_cols = {0, 3}
+        col_offset = 4
         if show_quality:
             center_cols.add(col_offset)
             col_offset += 1
@@ -212,7 +211,7 @@ class DetailPanel(QWidget):
             r = self._sub.rowCount()
             self._sub.insertRow(r)
             self._sub.setRowHeight(r, 38)
-            cells = [str(i + 1), line.item_code, line.item_name,
+            cells = [str(i + 1), line.item_name,
                      line.unit_of_measure, str(line.quantity)]
             if show_quality:
                 cells.append(line.quality_level)
@@ -275,7 +274,7 @@ class DetailPanel(QWidget):
 
         # ── column headers ─────────────────────────────────────────────────
         tbl_row = 9
-        cols = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"]
+        cols = ["STT", "Tên Hàng", "ĐVT", "Số Lượng"]
         if show_quality:
             cols.append("Mức HH")
         if show_price:
@@ -296,7 +295,7 @@ class DetailPanel(QWidget):
         # ── data rows ──────────────────────────────────────────────────────
         for i, line in enumerate(lines):
             dr = tbl_row + 1 + i
-            row_vals = [i + 1, line.item_code, line.item_name,
+            row_vals = [i + 1, line.item_name,
                         line.unit_of_measure, line.quantity]
             if show_quality:
                 row_vals.append(line.quality_level)
@@ -308,7 +307,7 @@ class DetailPanel(QWidget):
                 cell = ws.cell(row=dr, column=ci, value=val)
                 cell.font = val_font
                 cell.border = border
-                if ci in (1, 4, 5):
+                if ci in (1, 3, 4):
                     cell.alignment = Alignment(horizontal="center")
                 if show_price and ci in (len(cols) - 1, len(cols)):
                     cell.number_format = '#,##0'

@@ -121,7 +121,7 @@ class DetailPanel(QWidget):
         root.addWidget(sub_lbl)
 
         show_price = (issue.subtype == "to_unit")
-        sub_cols = ["STT", "Mã hàng", "Tên Hàng", "ĐVT", "Số lượng"]
+        sub_cols = ["STT", "Tên Hàng", "ĐVT", "Số lượng"]
         if show_price:
             sub_cols += ["Đơn Giá", "Thành Tiền"]
         sub_cols.append("Ghi Chú")
@@ -147,7 +147,6 @@ class DetailPanel(QWidget):
         sh = self._sub.horizontalHeader()
         modes = [
             (QHeaderView.ResizeMode.Fixed, 44),
-            (QHeaderView.ResizeMode.Fixed, 88),
             (QHeaderView.ResizeMode.Stretch, None),
             (QHeaderView.ResizeMode.Fixed, 72),
             (QHeaderView.ResizeMode.Fixed, 84),
@@ -182,15 +181,15 @@ class DetailPanel(QWidget):
 
     def _load_lines(self, lines: list[IssueLine], show_price: bool):
         self._sub.setRowCount(0)
-        center_cols = {0, 4}
+        center_cols = {0, 3}
         if show_price:
-            center_cols.update({5, 6})
+            center_cols.update({4, 5})
 
         for i, line in enumerate(lines):
             r = self._sub.rowCount()
             self._sub.insertRow(r)
             self._sub.setRowHeight(r, 38)
-            cells = [str(i + 1), line.item_code, line.item_name,
+            cells = [str(i + 1), line.item_name,
                      line.unit_of_measure, str(line.quantity)]
             if show_price:
                 total = line.quantity * line.unit_price

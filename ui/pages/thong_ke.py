@@ -354,12 +354,12 @@ class ThongKePage(QWidget):
 
     def _table_columns(self) -> list[str]:
         if self._mode == "kho":
-            return ["STT", "Loại", "Kho / Đơn Vị", "Mã Hàng", "Tên Hàng",
+            return ["STT", "Loại", "Kho / Đơn Vị", "Tên Hàng",
                     "ĐVT", "H1", "H2", "H3", "H4", "Tổng"]
         if self._mode == "don_vi":
-            return ["STT", "Đơn Vị", "Mã Hàng", "Tên Hàng", "ĐVT",
+            return ["STT", "Đơn Vị", "Tên Hàng", "ĐVT",
                     "H1", "H2", "H3", "H4", "Tổng", "Ngày Nhận ĐV"]
-        return ["STT", "Kho", "Mã Hàng", "Tên Hàng", "ĐVT",
+        return ["STT", "Kho", "Tên Hàng", "ĐVT",
                 "Tổng", "Đang Mượn", "Sẵn Sàng"]
 
     def _setup_col_widths(self):
@@ -369,7 +369,6 @@ class ThongKePage(QWidget):
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Stretch, None),
-                (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
                 (QHeaderView.ResizeMode.Fixed, 64),
@@ -382,7 +381,6 @@ class ThongKePage(QWidget):
             specs = [
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Stretch, None),
-                (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 60),
                 (QHeaderView.ResizeMode.Fixed, 60),
@@ -396,7 +394,6 @@ class ThongKePage(QWidget):
             specs = [
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Stretch, None),
-                (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 60),
                 (QHeaderView.ResizeMode.Fixed, 72),
@@ -425,8 +422,7 @@ class ThongKePage(QWidget):
                 "SELECT id, name, code, type FROM warehouses WHERE is_active=1 ORDER BY type, name"
             ).fetchall()
             for r in rows:
-                prefix = "Kho" if r["type"] == "TONG" else "ĐV"
-                self._wh_combo.addItem(f"[{prefix}] {r['code']} – {r['name']}", r["id"])
+                self._wh_combo.addItem(r["name"], r["id"])
         else:
             wh_type = {"don_vi": "DON_VI", "shared": "TONG"}[self._mode]
             rows = conn.execute(
@@ -434,7 +430,7 @@ class ThongKePage(QWidget):
                 (wh_type,)
             ).fetchall()
             for r in rows:
-                self._wh_combo.addItem(f"{r['code']} – {r['name']}", r["id"])
+                self._wh_combo.addItem(r["name"], r["id"])
         for i in range(self._wh_combo.count()):
             if self._wh_combo.itemData(i) == current:
                 self._wh_combo.setCurrentIndex(i)
@@ -544,7 +540,6 @@ class ThongKePage(QWidget):
         if q:
             rows = [r for r in rows
                     if q in r["item_name"].lower()
-                    or q in r["item_code"].lower()
                     or q in r["wh_name"].lower()
                     or q in r["wh_code"].lower()]
         self._load_table(rows)
@@ -562,7 +557,6 @@ class ThongKePage(QWidget):
                     (str(i + 1), True),
                     (type_label, True),
                     (r["wh_name"], False),
-                    (r["item_code"], False),
                     (r["item_name"], False),
                     (r["unit_of_measure"], True),
                     (str(r["h1"]) if r["h1"] else "—", True),
@@ -575,7 +569,6 @@ class ThongKePage(QWidget):
                 cells = [
                     (str(i + 1), True),
                     (r["wh_name"], False),
-                    (r["item_code"], False),
                     (r["item_name"], False),
                     (r["unit_of_measure"], True),
                     (str(r["h1"]) if r["h1"] else "—", True),
@@ -590,7 +583,6 @@ class ThongKePage(QWidget):
                 cells = [
                     (str(i + 1), True),
                     (r["wh_name"], False),
-                    (r["item_code"], False),
                     (r["item_name"], False),
                     (r["unit_of_measure"], True),
                     (str(r["total_qty"]), True),
@@ -604,8 +596,8 @@ class ThongKePage(QWidget):
                 if center:
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 # highlight H4 column
-                if ((self._mode == "kho" and c == 9) or
-                        (self._mode == "don_vi" and c == 8)):
+                if ((self._mode == "kho" and c == 8) or
+                        (self._mode == "don_vi" and c == 7)):
                     if val not in ("—", "0"):
                         cell.setForeground(Qt.GlobalColor.red)
                 self._table.setItem(ri, c, cell)
@@ -616,10 +608,10 @@ class ThongKePage(QWidget):
 class ThongKeSharedPage(QWidget):
     """Hàng dùng chung – tồn kho (H1–H3), đang cho mượn, chờ thanh xử lý (H4)."""
 
-    _COLS_TON  = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "H1", "H2", "H3", "Tồn Kho"]
-    _COLS_MUON = ["STT", "Số Phiếu", "Ngày Mượn", "Mã Hàng", "Tên Hàng",
+    _COLS_TON  = ["STT", "Tên Hàng", "ĐVT", "H1", "H2", "H3", "Tồn Kho"]
+    _COLS_MUON = ["STT", "Số Phiếu", "Ngày Mượn", "Tên Hàng",
                   "ĐVT", "Số Lượng", "Đơn Vị / Người Mượn"]
-    _COLS_TXL  = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"]
+    _COLS_TXL  = ["STT", "Tên Hàng", "ĐVT", "Số Lượng"]
 
     _TABS = [
         ("ton",  "Tồn Kho"),
@@ -846,7 +838,7 @@ class ThongKeSharedPage(QWidget):
             "SELECT id, code, name FROM warehouses"
             " WHERE type='TONG' AND is_active=1 ORDER BY name"
         ).fetchall():
-            self._wh_combo.addItem(f"{r['code']} – {r['name']}", r["id"])
+            self._wh_combo.addItem(r["name"], r["id"])
         for i in range(self._wh_combo.count()):
             if self._wh_combo.itemData(i) == current:
                 self._wh_combo.setCurrentIndex(i)
@@ -913,16 +905,16 @@ class ThongKeSharedPage(QWidget):
         q = self._search.text().strip().lower()
         if self._active_tab == "ton":
             rows = [r for r in self._raw_ton
-                    if not q or q in r["item_name"].lower() or q in r["item_code"].lower()]
+                    if not q or q in r["item_name"].lower()]
             self._load_ton(rows)
         elif self._active_tab == "muon":
             rows = [r for r in self._raw_muon
-                    if not q or q in r["item_name"].lower() or q in r["item_code"].lower()
+                    if not q or q in r["item_name"].lower()
                     or q in (r["borrower"] or "").lower()]
             self._load_muon(rows)
         else:
             rows = [r for r in self._raw_txl
-                    if not q or q in r["item_name"].lower() or q in r["item_code"].lower()]
+                    if not q or q in r["item_name"].lower()]
             self._load_txl(rows)
 
     # ── Table helpers ─────────────────────────────────────────────────────────
@@ -948,7 +940,7 @@ class ThongKeSharedPage(QWidget):
     def _load_ton(self, rows):
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_TON, [
-            (F, 52), (F, 110), (S, None), (F, 60),
+            (F, 52), (S, None), (F, 60),
             (F, 72), (F, 72), (F, 72), (F, 80),
         ])
         self._table.setRowCount(0)
@@ -958,7 +950,6 @@ class ThongKeSharedPage(QWidget):
             self._table.setRowHeight(ri, 48)
             for c, args in enumerate([
                 (str(i + 1),                              True),
-                (r["item_code"],                          False),
                 (r["item_name"],                          False),
                 (r["unit_of_measure"],                    True),
                 (str(r["h1"]) if r["h1"] else "—",       True),
@@ -971,7 +962,7 @@ class ThongKeSharedPage(QWidget):
     def _load_muon(self, rows):
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_MUON, [
-            (F, 52), (F, 110), (F, 110), (F, 110), (S, None),
+            (F, 52), (F, 110), (F, 110), (S, None),
             (F, 60), (F, 88), (S, None),
         ])
         self._table.setRowCount(0)
@@ -983,7 +974,6 @@ class ThongKeSharedPage(QWidget):
                 (str(i + 1),                         True),
                 (r["reference_number"] or "—",       True),
                 (r["transaction_date"],              True),
-                (r["item_code"],                     False),
                 (r["item_name"],                     False),
                 (r["unit_of_measure"],               True),
                 (str(r["quantity"]),                 True),
@@ -994,7 +984,7 @@ class ThongKeSharedPage(QWidget):
     def _load_txl(self, rows):
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_TXL, [
-            (F, 52), (F, 110), (S, None), (F, 60), (F, 80),
+            (F, 52), (S, None), (F, 60), (F, 80),
         ])
         self._table.setRowCount(0)
         for i, r in enumerate(rows):
@@ -1003,7 +993,6 @@ class ThongKeSharedPage(QWidget):
             self._table.setRowHeight(ri, 48)
             for c, args in enumerate([
                 (str(i + 1),           True),
-                (r["item_code"],       False),
                 (r["item_name"],       False),
                 (r["unit_of_measure"], True),
                 (str(r["total"]),      True, "red"),
@@ -1016,9 +1005,9 @@ class ThongKeSharedPage(QWidget):
 class ThongKeKhoPage(QWidget):
     """Tồn kho theo từng kho/đơn vị — mỗi kho là một tab riêng."""
 
-    _COLS = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
+    _COLS = ["STT", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
              "H1", "H2", "H3", "H4", "Tổng"]
-    _COLS_SEARCH = ["STT", "Kho", "Mã Hàng", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
+    _COLS_SEARCH = ["STT", "Kho", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
                     "H1", "H2", "H3", "H4", "Tổng"]
 
     def __init__(self):
@@ -1180,7 +1169,6 @@ class ThongKeKhoPage(QWidget):
             [
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Fixed, 100),
-                (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
                 (QHeaderView.ResizeMode.Fixed, 110),
@@ -1192,7 +1180,6 @@ class ThongKeKhoPage(QWidget):
                 (QHeaderView.ResizeMode.Fixed, 80),
             ] if search_mode else [
                 (QHeaderView.ResizeMode.Fixed, 52),
-                (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
                 (QHeaderView.ResizeMode.Fixed, 110),
@@ -1394,7 +1381,7 @@ class ThongKeKhoPage(QWidget):
 
         if is_searching:
             rows = [r for r in self._search_raw
-                    if q in r["item_name"].lower() or q in r["item_code"].lower()
+                    if q in r["item_name"].lower()
                     or q in r["wh_name"].lower() or q in r["wh_code"].lower()]
             self._load_table(rows, search_mode=True)
         else:
@@ -1404,7 +1391,7 @@ class ThongKeKhoPage(QWidget):
         q = self._local_search.text().strip().lower()
         rows = self._raw if not q else [
             r for r in self._raw
-            if q in r["item_name"].lower() or q in r["item_code"].lower()
+            if q in r["item_name"].lower()
         ]
         self._load_table(rows, search_mode=False)
 
@@ -1457,7 +1444,6 @@ class ThongKeKhoPage(QWidget):
                 cells = [
                     (str(i + 1),           True,  False, None),
                     (r["wh_code"],         True,  False, None),
-                    (r["item_code"],       False, False, None),
                     (r["item_name"],       False, False, None),
                     (r["unit_of_measure"], True,  False, None),
                     (nien_han,             True,  nien_han_red, None),
@@ -1471,7 +1457,6 @@ class ThongKeKhoPage(QWidget):
             else:
                 cells = [
                     (str(i + 1),           True,  False, None),
-                    (r["item_code"],       False, False, None),
                     (r["item_name"],       False, False, None),
                     (r["unit_of_measure"], True,  False, None),
                     (nien_han,             True,  nien_han_red, None),
@@ -1496,7 +1481,7 @@ class ThongKeKhoPage(QWidget):
 
             # Store edit key on H1-H4 cells so double-click knows what to update
             wh_id = r["wh_id"] if search_mode else self._active_wh_id
-            h_start = 7 if search_mode else 6
+            h_start = 6 if search_mode else 5
             for qi, ql in enumerate(("H1", "H2", "H3", "H4")):
                 item = self._table.item(ri, h_start + qi)
                 if item:
@@ -1527,9 +1512,9 @@ class ThongKeKhoPage(QWidget):
 class ThongKeDonViPage(QWidget):
     """Tồn kho tại Đơn Vị — mỗi đơn vị là một tab, niên hạn tính từ ngày nhập đơn vị."""
 
-    _COLS = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
+    _COLS = ["STT", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
              "H1", "H2", "H3", "H4", "Tổng"]
-    _COLS_SEARCH = ["STT", "Đơn Vị", "Mã Hàng", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
+    _COLS_SEARCH = ["STT", "Đơn Vị", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
                     "H1", "H2", "H3", "H4", "Tổng"]
 
     def __init__(self):
@@ -1663,7 +1648,7 @@ class ThongKeDonViPage(QWidget):
         self._unit_combo.blockSignals(True)
         self._unit_combo.clear()
         for r in self._wh_list:
-            self._unit_combo.addItem(f"{r['code']} – {r['name']}", r["id"])
+            self._unit_combo.addItem(r["name"], r["id"])
         for i in range(self._unit_combo.count()):
             if self._unit_combo.itemData(i) == self._active_wh_id:
                 self._unit_combo.setCurrentIndex(i)
@@ -1689,7 +1674,6 @@ class ThongKeDonViPage(QWidget):
             [
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Fixed, 90),
-                (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
                 (QHeaderView.ResizeMode.Fixed, 110),
@@ -1701,7 +1685,6 @@ class ThongKeDonViPage(QWidget):
                 (QHeaderView.ResizeMode.Fixed, 80),
             ] if search_mode else [
                 (QHeaderView.ResizeMode.Fixed, 52),
-                (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
                 (QHeaderView.ResizeMode.Fixed, 110),
@@ -1890,7 +1873,7 @@ class ThongKeDonViPage(QWidget):
 
         if is_searching:
             rows = [r for r in self._search_raw
-                    if q in r["item_name"].lower() or q in r["item_code"].lower()
+                    if q in r["item_name"].lower()
                     or q in r["wh_name"].lower() or q in r["wh_code"].lower()]
             self._load_table(rows, search_mode=True)
         else:
@@ -1900,7 +1883,7 @@ class ThongKeDonViPage(QWidget):
         q = self._local_search.text().strip().lower()
         rows = self._raw if not q else [
             r for r in self._raw
-            if q in r["item_name"].lower() or q in r["item_code"].lower()
+            if q in r["item_name"].lower()
         ]
         self._load_table(rows, search_mode=False)
 
@@ -1983,7 +1966,6 @@ class ThongKeDonViPage(QWidget):
                 cells = [
                     (str(i + 1),           True,  None,        None),
                     (r["wh_code"],         True,  None,        None),
-                    (r["item_code"],       False, None,        None),
                     (r["item_name"],       False, None,        None),
                     (r["unit_of_measure"], True,  None,        None),
                     (tai_dv,               True,  tai_dv_clr,  None),
@@ -1998,7 +1980,6 @@ class ThongKeDonViPage(QWidget):
             else:
                 cells = [
                     (str(i + 1),           True,  None,        None),
-                    (r["item_code"],       False, None,        None),
                     (r["item_name"],       False, None,        None),
                     (r["unit_of_measure"], True,  None,        None),
                     (tai_dv,               True,  tai_dv_clr,  None),
@@ -2026,7 +2007,7 @@ class ThongKeDonViPage(QWidget):
 
             # Store edit key on H1-H4 cells so double-click knows what to update
             wh_id = r["wh_id"] if search_mode else self._active_wh_id
-            h_start = 7 if search_mode else 6
+            h_start = 6 if search_mode else 5
             for qi, ql in enumerate(("H1", "H2", "H3", "H4")):
                 item = self._table.item(ri, h_start + qi)
                 if item:

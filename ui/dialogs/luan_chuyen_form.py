@@ -58,7 +58,7 @@ class TransferLineRow(QWidget):
         self.combo.setMinimumWidth(190)
         self.combo.setStyleSheet(_FIELD)
         for it in item_types:
-            self.combo.addItem(f"{it.code} – {it.name}", it)
+            self.combo.addItem(it.name, it)
 
         self.lbl_unit = QLabel("—")
         self.lbl_unit.setFixedWidth(56)
@@ -198,7 +198,7 @@ class LuanChuyenFormDialog(QDialog):
             c.setStyleSheet(_FIELD)
             c.addItem("— Chọn —", None)
             for w in whs:
-                c.addItem(f"{w.code} – {w.name}", w.id)
+                c.addItem(w.name, w.id)
             return c
 
         whs = self._don_vi if self._subtype == "dv_dv" else self._tong

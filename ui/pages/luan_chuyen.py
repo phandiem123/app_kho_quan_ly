@@ -99,7 +99,7 @@ class _DetailPanel(QWidget):
         root.addWidget(sub_lbl)
 
         show_ql = not is_kho
-        sub_cols = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT"]
+        sub_cols = ["STT", "Tên Hàng", "ĐVT"]
         if show_ql:
             sub_cols.append("Mức")
         sub_cols += ["Số Lượng", "Ghi Chú"]
@@ -122,7 +122,6 @@ class _DetailPanel(QWidget):
         sh = sub.horizontalHeader()
         modes = [
             (QHeaderView.ResizeMode.Fixed, 44),
-            (QHeaderView.ResizeMode.Fixed, 88),
             (QHeaderView.ResizeMode.Stretch, None),
             (QHeaderView.ResizeMode.Fixed, 72),
         ]
@@ -137,13 +136,13 @@ class _DetailPanel(QWidget):
             if w:
                 sub.setColumnWidth(i, w)
 
-        center_cols = {0, 3, 4, 5} if show_ql else {0, 3, 4}
+        center_cols = {0, 2, 3, 4} if show_ql else {0, 2, 3}
 
         for i, line in enumerate(lines):
             r = sub.rowCount()
             sub.insertRow(r)
             sub.setRowHeight(r, 38)
-            cells = [str(i + 1), line.item_code, line.item_name, line.unit_of_measure]
+            cells = [str(i + 1), line.item_name, line.unit_of_measure]
             if show_ql:
                 cells.append(line.quality_level)
             cells += [str(line.quantity), line.notes]

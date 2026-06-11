@@ -80,7 +80,7 @@ class DotsButton(QPushButton):
 
 # ── Bảng danh sách kho ────────────────────────────────────────────────────────
 class KhoTable(QTableWidget):
-    COLS = ["STT", "Tên Kho", "Mã Kho", "Loại", "Địa Chỉ", "Ghi Chú", ""]
+    COLS = ["STT", "Tên Kho", "Loại", "Địa Chỉ", "Ghi Chú", ""]
 
     def __init__(self, on_view, on_edit, on_delete):
         super().__init__(0, len(self.COLS))
@@ -113,15 +113,13 @@ class KhoTable(QTableWidget):
         h = self.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)   # STT
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Tên Kho
-        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)   # Mã Kho
-        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)   # Loại
-        h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)  # Địa Chỉ
-        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)  # Ghi Chú
-        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)   # actions
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)   # Loại
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # Địa Chỉ
+        h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)  # Ghi Chú
+        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)   # actions
         self.setColumnWidth(0, 56)
         self.setColumnWidth(2, 100)
-        self.setColumnWidth(3, 100)
-        self.setColumnWidth(6, 52)
+        self.setColumnWidth(5, 52)
 
     def load(self, warehouses: list[Warehouse]):
         self.setRowCount(0)
@@ -133,7 +131,6 @@ class KhoTable(QTableWidget):
             cells = [
                 str(i + 1),
                 wh.name,
-                wh.code,
                 _TYPE_LABEL.get(wh.type, wh.type),
                 wh.address,
                 wh.notes,
@@ -146,7 +143,7 @@ class KhoTable(QTableWidget):
                 self.setItem(r, col, item)
 
             dots = DotsButton(wh, self._on_view, self._on_edit, self._on_delete)
-            self.setCellWidget(r, 6, dots)
+            self.setCellWidget(r, 5, dots)
 
 
 # ── Trang Danh Sách Kho ───────────────────────────────────────────────────────
@@ -239,7 +236,6 @@ class DanhSachKhoPage(QWidget):
         QMessageBox.information(
             self, "Chi Tiết Kho",
             f"<b>Tên:</b> {wh.name}<br>"
-            f"<b>Mã:</b> {wh.code}<br>"
             f"<b>Loại:</b> {_TYPE_LABEL.get(wh.type, wh.type)}<br>"
             f"<b>Địa chỉ:</b> {wh.address or '—'}<br>"
             f"<b>Ghi chú:</b> {wh.notes or '—'}",

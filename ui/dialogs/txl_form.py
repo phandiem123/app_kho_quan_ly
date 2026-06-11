@@ -53,7 +53,7 @@ class _ItemRow(QWidget):
         wh.setStyleSheet("color: #444;")
         h.addWidget(wh)
 
-        name = QLabel(f"{item.item_code} – {item.item_name}")
+        name = QLabel(item.item_name)
         name.setFont(QFont(FONT, 11))
         name.setMinimumWidth(180)
         h.addWidget(name, 1)
@@ -140,7 +140,7 @@ class TxlFormDialog(QDialog):
         self._wh_combo.setFixedHeight(34)
         self._wh_combo.setStyleSheet(_FIELD)
         for wh in wh_get_all(wh_type=self._wh_type):
-            self._wh_combo.addItem(f"{wh.code} – {wh.name}", wh.id)
+            self._wh_combo.addItem(wh.name, wh.id)
         self._wh_combo.currentIndexChanged.connect(self._reload_items)
         form.addRow(_lbl("Kho / ĐV:"), self._wh_combo)
 

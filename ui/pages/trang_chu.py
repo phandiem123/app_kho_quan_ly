@@ -149,7 +149,7 @@ class DotsButton(QPushButton):
 
 # ── Bảng Kho / Đơn Vị ────────────────────────────────────────────────────────
 class KhoTable(QTableWidget):
-    COLS = ["STT", "Tên Kho", "Mã Kho", "Loại", "Địa Chỉ", "Ghi Chú", ""]
+    COLS = ["STT", "Tên Kho", "Loại", "Địa Chỉ", "Ghi Chú", ""]
 
     def __init__(self):
         super().__init__(0, len(self.COLS))
@@ -167,17 +167,15 @@ class KhoTable(QTableWidget):
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 56)
         self.setColumnWidth(2, 100)
-        self.setColumnWidth(3, 100)
-        self.setColumnWidth(6, 52)
+        self.setColumnWidth(5, 52)
 
     def set_type_col_visible(self, visible: bool):
-        self.setColumnHidden(3, not visible)
+        self.setColumnHidden(2, not visible)
 
     def load(self, warehouses: list[Warehouse], on_edit=None, on_delete=None):
         self.setRowCount(0)
@@ -185,7 +183,7 @@ class KhoTable(QTableWidget):
             r = self.rowCount()
             self.insertRow(r)
             self.setRowHeight(r, 52)
-            cells = [str(i + 1), wh.name, wh.code,
+            cells = [str(i + 1), wh.name,
                      _TYPE_LABEL.get(wh.type, wh.type), wh.address or "", wh.notes or ""]
             for col, val in enumerate(cells):
                 item = QTableWidgetItem(val)
@@ -195,12 +193,12 @@ class KhoTable(QTableWidget):
                 self.setItem(r, col, item)
             if on_edit or on_delete:
                 btn = DotsButton(wh, None, on_edit, on_delete)
-                self.setCellWidget(r, 6, btn)
+                self.setCellWidget(r, 5, btn)
 
 
 # ── Bảng Hàng Hoá ─────────────────────────────────────────────────────────────
 class HangHoaTable(QTableWidget):
-    COLS = ["STT", "Tên Hàng", "Mã Hàng", "Đơn Vị Tính", "Niên Hạn (năm)", "Đơn Giá", "Ghi Chú", ""]
+    COLS = ["STT", "Tên Hàng", "Đơn Vị Tính", "Niên Hạn (năm)", "Đơn Giá", "Ghi Chú", ""]
 
     def __init__(self):
         super().__init__(0, len(self.COLS))
@@ -220,15 +218,13 @@ class HangHoaTable(QTableWidget):
         h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 56)
-        self.setColumnWidth(2, 110)
-        self.setColumnWidth(3, 120)
-        self.setColumnWidth(4, 130)
-        self.setColumnWidth(5, 120)
-        self.setColumnWidth(7, 52)
+        self.setColumnWidth(2, 120)
+        self.setColumnWidth(3, 130)
+        self.setColumnWidth(4, 120)
+        self.setColumnWidth(6, 52)
 
     def load(self, items: list[ItemType], on_edit=None, on_delete=None):
         self.setRowCount(0)
@@ -239,17 +235,17 @@ class HangHoaTable(QTableWidget):
             months = it.total_lifespan_months
             years_str = f"{months // 12}" if months % 12 == 0 else f"{months / 12:.1f}"
             price_str = f"{it.unit_price:,.0f}" if it.unit_price else "—"
-            cells = [str(i + 1), it.name, it.code,
+            cells = [str(i + 1), it.name,
                      it.unit_of_measure, years_str, price_str, it.notes or ""]
             for col, val in enumerate(cells):
                 cell = QTableWidgetItem(val)
                 cell.setFont(QFont(FONT, 12))
-                if col in (0, 4, 5):
+                if col in (0, 3, 4):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.setItem(r, col, cell)
             if on_edit or on_delete:
                 btn = DotsButton(it, None, on_edit, on_delete)
-                self.setCellWidget(r, 7, btn)
+                self.setCellWidget(r, 6, btn)
 
 
 # ── Helper: info section frame ─────────────────────────────────────────────────
@@ -331,28 +327,24 @@ class TrangChuPage(QWidget):
         lists_row.setSpacing(20)
 
         self._lbl_borrow_count = QLabel()
-        self._borrow_table = _CompactTable(["Mã ĐV", "Tên Đơn Vị", "SL Đang Mượn"])
+        self._borrow_table = _CompactTable(["Tên Đơn Vị", "SL Đang Mượn"])
         bh = self._borrow_table.horizontalHeader()
-        bh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        bh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        bh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self._borrow_table.setColumnWidth(0, 80)
-        self._borrow_table.setColumnWidth(2, 110)
+        bh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        bh.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self._borrow_table.setColumnWidth(1, 110)
         lists_row.addWidget(
             _info_frame("Đơn Vị Chưa Trả Hàng Dùng Chung",
                         self._lbl_borrow_count, self._borrow_table), 1
         )
 
         self._lbl_h4_count = QLabel()
-        self._h4_table = _CompactTable(["Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"])
+        self._h4_table = _CompactTable(["Tên Hàng", "ĐVT", "Số Lượng"])
         hh = self._h4_table.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self._h4_table.setColumnWidth(0, 100)
-        self._h4_table.setColumnWidth(2, 64)
-        self._h4_table.setColumnWidth(3, 90)
+        self._h4_table.setColumnWidth(1, 64)
+        self._h4_table.setColumnWidth(2, 90)
         lists_row.addWidget(
             _info_frame("Hàng H4 Tại Kho",
                         self._lbl_h4_count, self._h4_table), 1
@@ -463,9 +455,9 @@ class TrangChuPage(QWidget):
                 row = self._borrow_table.rowCount()
                 self._borrow_table.insertRow(row)
                 self._borrow_table.setRowHeight(row, 44)
-                for col, val in enumerate([r["code"], r["name"], str(r["total_qty"])]):
+                for col, val in enumerate([r["name"], str(r["total_qty"])]):
                     align = (Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
-                             if col != 1 else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                             if col == 1 else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                     item = QTableWidgetItem(val)
                     item.setFont(QFont(FONT, 12))
                     item.setTextAlignment(align)
@@ -497,10 +489,10 @@ class TrangChuPage(QWidget):
                 row = self._h4_table.rowCount()
                 self._h4_table.insertRow(row)
                 self._h4_table.setRowHeight(row, 44)
-                for col, val in enumerate([r["code"], r["name"],
+                for col, val in enumerate([r["name"],
                                            r["unit_of_measure"], str(r["qty"])]):
                     align = (Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
-                             if col in (0, 2, 3) else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                             if col in (1, 2) else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                     item = QTableWidgetItem(val)
                     item.setFont(QFont(FONT, 12))
                     item.setTextAlignment(align)

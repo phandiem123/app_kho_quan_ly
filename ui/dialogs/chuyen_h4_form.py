@@ -49,7 +49,7 @@ class _LineRow(QWidget):
         self.combo_item.setMinimumWidth(180)
         self.combo_item.setStyleSheet(_FIELD)
         for it in self._items:
-            self.combo_item.addItem(f"{it['code']} – {it['name']}", it)
+            self.combo_item.addItem(it["name"], it)
         self.combo_item.currentIndexChanged.connect(self._refresh_available)
 
         self.combo_ql = QComboBox()
@@ -301,7 +301,7 @@ class ChuyenH4FormDialog(QDialog):
         self._wh_combo.blockSignals(True)
         self._wh_combo.clear()
         for r in rows:
-            self._wh_combo.addItem(f"{r['code']} – {r['name']}", r["id"])
+            self._wh_combo.addItem(r["name"], r["id"])
         self._wh_combo.blockSignals(False)
         self._load_items()
         if self._wh_combo.count():

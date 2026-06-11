@@ -78,8 +78,8 @@ class _DetailPanel(QWidget):
         grid.addWidget(pair("Nội Dung", rec.notes), 1, 0, 1, 3)
         root.addLayout(grid)
 
-        sub = QTableWidget(0, 5)
-        sub.setHorizontalHeaderLabels(["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"])
+        sub = QTableWidget(0, 4)
+        sub.setHorizontalHeaderLabels(["STT", "Tên Hàng", "ĐVT", "Số Lượng"])
         sub.verticalHeader().setVisible(False)
         sub.setShowGrid(False)
         sub.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -98,7 +98,6 @@ class _DetailPanel(QWidget):
         sh = sub.horizontalHeader()
         for i, (mode, w) in enumerate([
             (QHeaderView.ResizeMode.Fixed, 44),
-            (QHeaderView.ResizeMode.Fixed, 88),
             (QHeaderView.ResizeMode.Stretch, None),
             (QHeaderView.ResizeMode.Fixed, 60),
             (QHeaderView.ResizeMode.Fixed, 80),
@@ -112,12 +111,12 @@ class _DetailPanel(QWidget):
             sub.insertRow(r)
             sub.setRowHeight(r, 36)
             for c, val in enumerate([
-                str(i + 1), line.item_code, line.item_name,
+                str(i + 1), line.item_name,
                 line.unit_of_measure, str(line.quantity),
             ]):
                 cell = QTableWidgetItem(val)
                 cell.setFont(QFont(FONT, 11))
-                if c in (0, 3, 4):
+                if c in (0, 2, 3):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 sub.setItem(r, c, cell)
 
@@ -328,8 +327,7 @@ class TxlPage(QWidget):
         q = self._search.text().strip().lower()
         if q:
             items = [i for i in items if q in i.item_name.lower()
-                     or q in i.warehouse_name.lower()
-                     or q in i.item_code.lower()]
+                     or q in i.warehouse_name.lower()]
         self._load_h4_table(items)
 
     def _reload_history(self):
@@ -472,7 +470,7 @@ class TxlPage(QWidget):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _h4_columns(wh_type: str) -> list[str]:
-    cols = ["STT", "Kho / ĐV", "Mã Hàng", "Tên Hàng", "ĐVT", "H4"]
+    cols = ["STT", "Kho / ĐV", "Tên Hàng", "ĐVT", "H4"]
     if wh_type == "DON_VI":
         cols += ["Ngày Nhận ĐV", "Niên Hạn (Năm)"]
     cols += ["Số Lô", "Ghi Chú"]
@@ -483,7 +481,6 @@ def _h4_cells(i: int, item, show_months: bool):
     cells = [
         (str(i + 1), True, None),
         (item.warehouse_name, False, None),
-        (item.item_code, False, None),
         (item.item_name, False, None),
         (item.unit_of_measure, True, None),
         (str(item.quantity), True, None),
@@ -505,7 +502,6 @@ def _set_h4_col_widths(table: QTableWidget, wh_type: str):
     modes = [
         (QHeaderView.ResizeMode.Fixed, 52),
         (QHeaderView.ResizeMode.Stretch, None),
-        (QHeaderView.ResizeMode.Fixed, 100),
         (QHeaderView.ResizeMode.Stretch, None),
         (QHeaderView.ResizeMode.Fixed, 56),
         (QHeaderView.ResizeMode.Fixed, 72),

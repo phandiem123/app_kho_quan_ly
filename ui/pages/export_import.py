@@ -348,13 +348,13 @@ class ExportImportPage(QWidget):
             ws.title = "Mặt Hàng"
 
             _write_header(ws, [
-                "Mã Hàng", "Tên Hàng", "Đơn Vị Tính",
-                "Niên Hạn (tháng)", "Đơn Giá", "Ghi Chú", "Trạng Thái",
+                "Tên Hàng", "Đơn Vị Tính",
+                "Niên Hạn (Năm)", "Đơn Giá", "Ghi Chú", "Trạng Thái",
             ])
             for r in rows:
                 ws.append([
-                    r["code"], r["name"], r["unit_of_measure"],
-                    r["total_lifespan_months"],
+                    r["name"], r["unit_of_measure"],
+                    round((r["total_lifespan_months"] or 0) / 12.0, 1),
                     float(r["unit_price"] or 0),
                     r["notes"] or "",
                     "Hoạt động" if r["is_active"] else "Đã ẩn",
@@ -977,30 +977,35 @@ class ExportImportPage(QWidget):
                 if not row or not row[0]:
                     continue
                 try:
-                    code = str(row[0]).strip()
-                    name = str(row[1]).strip() if row[1] else ""
-                    uom  = str(row[2]).strip() if row[2] else ""
-                    life = int(row[3]) if row[3] else 0
-                    price = float(row[4]) if row[4] else 0.0
-                    notes = str(row[5]).strip() if len(row) > 5 and row[5] else ""
+                    name  = str(row[0]).strip() if row[0] else ""
+                    uom   = str(row[1]).strip() if row[1] else ""
+                    life  = int(round(float(row[2]) * 12)) if row[2] else 0
+                    price = float(row[3]) if row[3] else 0.0
+                    notes = str(row[4]).strip() if len(row) > 4 and row[4] else ""
 
-                    if not code or not name or not uom or not life:
+                    if not name or not uom or not life:
                         errors.append(f"Dòng {i}: thiếu dữ liệu bắt buộc")
                         skipped += 1
                         continue
 
                     existing = conn.execute(
-                        "SELECT id FROM item_types WHERE code=?", (code,)
+                        "SELECT id FROM item_types WHERE name=?", (name,)
                     ).fetchone()
 
                     if existing:
                         conn.execute(
-                            "UPDATE item_types SET name=?, unit_of_measure=?,"
-                            " total_lifespan_months=?, unit_price=?, notes=? WHERE code=?",
-                            (name, uom, life, price, notes, code),
+                            "UPDATE item_types SET unit_of_measure=?,"
+                            " total_lifespan_months=?, unit_price=?, notes=? WHERE name=?",
+                            (uom, life, price, notes, name),
                         )
                         updated += 1
                     else:
+                        n = 1
+                        while True:
+                            code = f"HH{n:04d}"
+                            if not conn.execute("SELECT 1 FROM item_types WHERE code=?", (code,)).fetchone():
+                                break
+                            n += 1
                         conn.execute(
                             "INSERT INTO item_types (code, name, unit_of_measure,"
                             " total_lifespan_months, unit_price, notes)"
@@ -1433,10 +1438,10 @@ class ExportImportPage(QWidget):
             ws = wb.active
             ws.title = "Mặt Hàng"
             _write_header(ws, [
-                "Mã Hàng *", "Tên Hàng *", "Đơn Vị Tính *",
-                "Niên Hạn (tháng) *", "Đơn Giá", "Ghi Chú",
+                "Tên Hàng *", "Đơn Vị Tính *",
+                "Niên Hạn (Năm) *", "Đơn Giá", "Ghi Chú",
             ])
-            ws.append(["AK47", "Súng AK47", "cái", 120, 15000000, ""])
+            ws.append(["Súng AK47", "cái", 10, 15000000, ""])
             _auto_width(ws)
             wb.save(path)
             QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
