@@ -524,7 +524,7 @@ class TrangChuPage(QWidget):
                     or query in w.name.lower()
                     or query in w.code.lower()
                     or query in (w.address or "").lower()]
-            self.table.set_type_col_visible(self._active_type == "TONG")
+            self.table.set_type_col_visible(False)
             self.table.load(data, on_edit=self._edit_warehouse, on_delete=self._delete_warehouse)
             self.table.setVisible(True)
             self.item_table.setVisible(False)

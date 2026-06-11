@@ -123,25 +123,6 @@ class ExportImportPage(QWidget):
         # ── Xuất dữ liệu ──────────────────────────────────────────────────────
         v.addWidget(_section_header("XUẤT DỮ LIỆU"))
 
-        export_row = QHBoxLayout()
-        export_row.setSpacing(16)
-        export_row.addWidget(_Card(
-            "Tồn Kho",
-            "Xuất toàn bộ tồn kho (kho, mặt hàng, mức hao hỏng, số lượng) ra file Excel.",
-            "Xuất Excel", self._export_inventory,
-        ))
-        export_row.addWidget(_Card(
-            "Danh Mục Mặt Hàng",
-            "Xuất danh sách mặt hàng (mã, tên, đơn vị tính, niên hạn, đơn giá) ra file Excel.",
-            "Xuất Excel", self._export_item_types,
-        ))
-        export_row.addWidget(_Card(
-            "Danh Sách Kho / Đơn Vị",
-            "Xuất danh sách kho và đơn vị (mã, tên, loại, địa chỉ) ra file Excel.",
-            "Xuất Excel", self._export_warehouses,
-        ))
-        v.addLayout(export_row)
-
         export_row2 = QHBoxLayout()
         export_row2.setSpacing(16)
         export_row2.addWidget(_Card(
