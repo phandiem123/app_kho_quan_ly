@@ -5,7 +5,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
-from database.item_types import ItemType, code_exists, insert, update
+import database
+from database.item_types import ItemType, insert, update
 
 FONT = "Segoe UI"
 
@@ -53,7 +54,6 @@ class ItemTypeFormDialog(QDialog):
             """)
             return e
 
-        self.f_code = field("VD: AK47, PKN01")
         self.f_name = field("Tên đầy đủ của hàng hoá")
         self.f_unit = field("VD: cái, bộ, chiếc, hộp")
 
@@ -100,7 +100,6 @@ class ItemTypeFormDialog(QDialog):
             QTextEdit:focus { border-color: #888; }
         """)
 
-        form.addRow(lbl("Mã Hàng *"), self.f_code)
         form.addRow(lbl("Tên Hàng *"), self.f_name)
         form.addRow(lbl("Đơn Vị Tính *"), self.f_unit)
         form.addRow(lbl("Niên Hạn (năm) *"), self.f_lifespan)
@@ -109,7 +108,6 @@ class ItemTypeFormDialog(QDialog):
         root.addLayout(form)
 
         if item:
-            self.f_code.setText(item.code)
             self.f_name.setText(item.name)
             self.f_unit.setText(item.unit_of_measure)
             self.f_lifespan.setValue(max(1, round(item.total_lifespan_months / 12)))
@@ -157,15 +155,11 @@ class ItemTypeFormDialog(QDialog):
         root.addLayout(btn_row)
 
     def _save(self):
-        code = self.f_code.text().strip()
         name = self.f_name.text().strip()
         unit = self.f_unit.text().strip()
         lifespan = self.f_lifespan.value() * 12  # convert years → months for storage
         notes = self.f_notes.toPlainText().strip()
 
-        if not code:
-            self._err("Vui lòng nhập Mã Hàng.")
-            return
         if not name:
             self._err("Vui lòng nhập Tên Hàng.")
             return
@@ -173,10 +167,16 @@ class ItemTypeFormDialog(QDialog):
             self._err("Vui lòng nhập Đơn Vị Tính.")
             return
 
-        exclude_id = self._editing.id if self._editing else None
-        if code_exists(code, exclude_id):
-            self._err(f"Mã Hàng '{code}' đã tồn tại.")
-            return
+        if self._editing:
+            code = self._editing.code
+        else:
+            conn = database.get_conn()
+            n = 1
+            while True:
+                code = f"HH{n:04d}"
+                if not conn.execute("SELECT 1 FROM item_types WHERE code=?", (code,)).fetchone():
+                    break
+                n += 1
 
         item = ItemType(
             id=self._editing.id if self._editing else None,

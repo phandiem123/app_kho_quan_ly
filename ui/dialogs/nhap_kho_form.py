@@ -1,9 +1,9 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QScrollArea,
-    QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit,
-    QPushButton, QComboBox, QMessageBox, QFrame, QWidget, QDateEdit,
+    QLabel, QLineEdit, QSpinBox, QTextEdit,
+    QPushButton, QComboBox, QCompleter, QMessageBox, QFrame, QWidget,
 )
-from PyQt6.QtCore import Qt, QDate, pyqtSignal
+from PyQt6.QtCore import Qt, QDate, pyqtSignal, QSortFilterProxyModel, QStringListModel
 from PyQt6.QtGui import QFont, QCursor
 from database.item_types import get_all as item_get_all
 from database.warehouses import get_all as wh_get_all
@@ -44,6 +44,7 @@ _TITLES = {
 class LineItemRow(QWidget):
     removed = pyqtSignal(object)
     value_changed = pyqtSignal()
+    item_changed = pyqtSignal()
 
     def __init__(self, item_types, show_price: bool = True,
                  show_quality: bool = False, parent=None):
@@ -60,6 +61,7 @@ class LineItemRow(QWidget):
         self.combo.setFixedHeight(34)
         self.combo.setMinimumWidth(190)
         self.combo.setStyleSheet(_FIELD)
+        self.combo.addItem("— Chọn mặt hàng —", None)
         for it in item_types:
             self.combo.addItem(it.name, it)
 
@@ -93,13 +95,19 @@ class LineItemRow(QWidget):
         """)
         self.combo_quality.setVisible(show_quality)
 
-        self.spin_price = QDoubleSpinBox()
-        self.spin_price.setRange(0, 999_999_999_999)
-        self.spin_price.setDecimals(0)
-        self.spin_price.setFixedWidth(120)
-        self.spin_price.setFixedHeight(34)
-        self.spin_price.setStyleSheet(_SPIN)
-        self.spin_price.setVisible(show_price)
+        self._show_price = show_price
+        self._unit_price = 0.0
+
+        self.lbl_price = QLabel("—")
+        self.lbl_price.setFixedWidth(130)
+        self.lbl_price.setFixedHeight(34)
+        self.lbl_price.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_price.setFont(QFont(FONT, 11))
+        self.lbl_price.setStyleSheet(
+            "color: #555; background: #f5f5f5; border: 1px solid #e0e0e0;"
+            " border-radius: 6px; padding: 0 8px;"
+        )
+        self.lbl_price.setVisible(show_price)
 
         self.lbl_total = QLabel("—")
         self.lbl_total.setFixedWidth(120)
@@ -132,27 +140,46 @@ class LineItemRow(QWidget):
         if show_quality:
             h.addWidget(self.combo_quality)
         if show_price:
-            h.addWidget(self.spin_price)
+            h.addWidget(self.lbl_price)
             h.addWidget(self.lbl_total)
         h.addWidget(self.edit_notes, 1)
         h.addWidget(btn_del)
 
         self.combo.currentIndexChanged.connect(self._on_item_changed)
         self.spin_qty.valueChanged.connect(self._recalc)
-        self.spin_price.valueChanged.connect(self._recalc)
 
-        if item_types:
-            self._on_item_changed(0)
 
     def _on_item_changed(self, _):
         it = self.combo.currentData()
         self.lbl_unit.setText(it.unit_of_measure if it else "—")
-        if hasattr(it, "unit_price") and it.unit_price and self.spin_price.isVisible():
-            self.spin_price.setValue(it.unit_price)
+        if self._show_price and it:
+            self._unit_price = it.unit_price or 0.0
+            self.lbl_price.setText(f"{self._unit_price:,.0f} đ" if self._unit_price else "—")
+        else:
+            self._unit_price = 0.0
+            self.lbl_price.setText("—")
         self._recalc()
+        self.item_changed.emit()
+
+    def refresh_available(self, exclude_ids: set):
+        current_it = self.combo.currentData()
+        current_id = current_it.id if current_it else None
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        self.combo.addItem("— Chọn mặt hàng —", None)
+        for it in self._item_types:
+            if it.id not in exclude_ids or it.id == current_id:
+                self.combo.addItem(it.name, it)
+        if current_id is not None:
+            for i in range(self.combo.count()):
+                d = self.combo.itemData(i)
+                if d and d.id == current_id:
+                    self.combo.setCurrentIndex(i)
+                    break
+        self.combo.blockSignals(False)
 
     def _recalc(self):
-        total = self.spin_qty.value() * self.spin_price.value()
+        total = self.spin_qty.value() * self._unit_price
         self.lbl_total.setText(f"{total:,.0f} đ" if total else "—")
         self.value_changed.emit()
 
@@ -166,7 +193,7 @@ class LineItemRow(QWidget):
             item_name=it.name,
             unit_of_measure=it.unit_of_measure,
             quantity=self.spin_qty.value(),
-            unit_price=self.spin_price.value(),
+            unit_price=self._unit_price,
             notes=self.edit_notes.text().strip(),
             quality_level=self.combo_quality.currentText() if self._show_quality else "H1",
         )
@@ -178,7 +205,9 @@ class LineItemRow(QWidget):
                 self.combo.setCurrentIndex(i)
                 break
         self.spin_qty.setValue(line.quantity)
-        self.spin_price.setValue(line.unit_price)
+        if self._show_price:
+            self._unit_price = line.unit_price or 0.0
+            self.lbl_price.setText(f"{self._unit_price:,.0f} đ" if self._unit_price else "—")
         self.edit_notes.setText(line.notes)
         if self._show_quality:
             idx = self.combo_quality.findText(line.quality_level)
@@ -246,13 +275,15 @@ class NhapKhoFormDialog(QDialog):
         self.f_ref = fld("VD: QL-001", 260)
         self.f_wh = combo_wh(self._tong)
 
-        self.f_date = QDateEdit(QDate.currentDate())
-        self.f_date.setDisplayFormat("dd/MM/yyyy")
-        self.f_date.setCalendarPopup(True)
+        today = QDate.currentDate()
+        self.f_date = QLineEdit(today.toString("dd/MM/yyyy"))
+        self.f_date.setPlaceholderText("00/00/0000")
+        self.f_date.setMaxLength(10)
         self.f_date.setFixedHeight(36)
-        self.f_date.setMaximumWidth(180)
+        self.f_date.setFixedWidth(140)
         self.f_date.setFont(QFont(FONT, 12))
         self.f_date.setStyleSheet(_FIELD)
+        self.f_date.textEdited.connect(self._fmt_date)
 
         self.f_person = fld("Tên người giao")
         ph_sup = "Đơn vị / công ty cung cấp" if self._subtype == "new" else "Tên sự kiện / nguồn"
@@ -459,6 +490,18 @@ class NhapKhoFormDialog(QDialog):
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _fmt_date(self, text: str):
+        digits = "".join(c for c in text if c.isdigit())[:8]
+        out = digits[:2]
+        if len(digits) > 2:
+            out += "/" + digits[2:4]
+        if len(digits) > 4:
+            out += "/" + digits[4:8]
+        self.f_date.blockSignals(True)
+        self.f_date.setText(out)
+        self.f_date.blockSignals(False)
+        self.f_date.setCursorPosition(len(out))
+
     def _update_source_toggle_style(self):
         if not self._btn_unit_src:
             return
@@ -489,22 +532,40 @@ class NhapKhoFormDialog(QDialog):
             self.f_supplier.setVisible(not is_unit)
         self._update_source_toggle_style()
 
+    def _refresh_all_combos(self):
+        used: set[int] = set()
+        for i in range(self._rows_layout.count()):
+            w = self._rows_layout.itemAt(i).widget()
+            if isinstance(w, LineItemRow):
+                d = w.get_data()
+                if d:
+                    used.add(d.item_type_id)
+        for i in range(self._rows_layout.count()):
+            w = self._rows_layout.itemAt(i).widget()
+            if isinstance(w, LineItemRow):
+                own_d = w.get_data()
+                own_id = own_d.item_type_id if own_d else None
+                w.refresh_available(used - ({own_id} if own_id else set()))
+
     def _add_line(self, line: ReceiptLine | None = None):
         row = LineItemRow(self._item_types, show_price=self._show_price,
                           show_quality=self._show_quality, parent=self)
         if line:
             row.fill(line)
         row.removed.connect(self._remove_line)
+        row.item_changed.connect(self._refresh_all_combos)
         if self._show_price:
             row.value_changed.connect(self._update_total)
         count = self._rows_layout.count()
         self._rows_layout.insertWidget(count - 1, row)
+        self._refresh_all_combos()
         if self._show_price:
             self._update_total()
 
     def _remove_line(self, row):
         self._rows_layout.removeWidget(row)
         row.deleteLater()
+        self._refresh_all_combos()
         if self._show_price:
             self._update_total()
 
@@ -540,7 +601,7 @@ class NhapKhoFormDialog(QDialog):
         self.f_person.setText(receipt.created_by)
         d = QDate.fromString(receipt.transaction_date, "yyyy-MM-dd")
         if d.isValid():
-            self.f_date.setDate(d)
+            self.f_date.setText(d.toString("dd/MM/yyyy"))
         self.f_notes.setPlainText(receipt.notes)
         for line in get_lines(receipt.id):
             self._add_line(line)
@@ -549,6 +610,9 @@ class NhapKhoFormDialog(QDialog):
         ref = self.f_ref.text().strip()
         if not ref:
             return self._err("Vui lòng nhập Số Phiếu.")
+        _d = QDate.fromString(self.f_date.text(), "dd/MM/yyyy")
+        if not _d.isValid():
+            return self._err("Ngày không hợp lệ. Vui lòng nhập đúng định dạng dd/MM/yyyy.")
         wh_id = self.f_wh.currentData()
         if not wh_id:
             return self._err("Vui lòng chọn Kho Nhập.")
@@ -597,7 +661,7 @@ class NhapKhoFormDialog(QDialog):
             to_warehouse_id=wh_id,
             to_warehouse_name="",
             from_warehouse_id=from_wh_id,
-            transaction_date=self.f_date.date().toString("yyyy-MM-dd"),
+            transaction_date=QDate.fromString(self.f_date.text(), "dd/MM/yyyy").toString("yyyy-MM-dd"),
             supplier=supplier,
             created_by=self.f_person.text().strip(),
             transporter=transporter,
