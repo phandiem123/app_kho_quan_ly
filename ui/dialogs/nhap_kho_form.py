@@ -270,6 +270,10 @@ class NhapKhoFormDialog(QDialog):
         self.f_notes.setFixedHeight(56)
         self.f_notes.setStyleSheet(_FIELD)
 
+        self._shared_source = "unit_return"
+        self._btn_unit_src = self._btn_event_src = None
+        self._lbl_unit_src = self._lbl_event_src = None
+
         row1 = QHBoxLayout()
         row1.setSpacing(24)
 
@@ -289,8 +293,29 @@ class NhapKhoFormDialog(QDialog):
         elif self._subtype == "event_return":
             col_b.addRow(lbl("Tên Sự Kiện"), self.f_supplier)
         elif self._subtype == "shared_return":
-            col_b.addRow(lbl("Đơn Vị Trả"), self.f_from_wh)
-            col_b.addRow(lbl("Sự kiện"), self.f_supplier)
+            tgl_w = QWidget()
+            tgl_w.setFixedHeight(32)
+            tgl_w.setStyleSheet("background: #f0f0f0; border-radius: 8px;")
+            tgl_h = QHBoxLayout(tgl_w)
+            tgl_h.setContentsMargins(3, 3, 3, 3)
+            tgl_h.setSpacing(2)
+            self._btn_unit_src = QPushButton("Đơn Vị Trả Về")
+            self._btn_event_src = QPushButton("Sự Kiện")
+            for _b in (self._btn_unit_src, self._btn_event_src):
+                _b.setFont(QFont(FONT, 11))
+                _b.setFixedHeight(26)
+                _b.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                tgl_h.addWidget(_b)
+            self._btn_unit_src.clicked.connect(lambda: self._set_shared_source("unit_return"))
+            self._btn_event_src.clicked.connect(lambda: self._set_shared_source("event_return"))
+            col_b.addRow(lbl("Nguồn Trả *"), tgl_w)
+            self._lbl_unit_src = lbl("Đơn Vị Trả *")
+            self._lbl_event_src = lbl("Tên Sự Kiện")
+            col_b.addRow(self._lbl_unit_src, self.f_from_wh)
+            col_b.addRow(self._lbl_event_src, self.f_supplier)
+            self.f_supplier.setVisible(False)
+            self._lbl_event_src.setVisible(False)
+            self._update_source_toggle_style()
         else:
             col_b.addRow(lbl(self._from_label), self.f_from_wh)
         col_b.addRow(lbl("Người giao"), self.f_person)
@@ -434,6 +459,36 @@ class NhapKhoFormDialog(QDialog):
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _update_source_toggle_style(self):
+        if not self._btn_unit_src:
+            return
+        active = (
+            "QPushButton { border: none; border-radius: 6px; padding: 0 12px;"
+            " background: #111; color: white; font-size: 11px; font-weight: 600; }"
+        )
+        inactive = (
+            "QPushButton { border: none; border-radius: 6px; padding: 0 12px;"
+            " background: transparent; color: #111; font-size: 11px; }"
+            " QPushButton:hover { background: #e3e3e3; }"
+        )
+        self._btn_unit_src.setStyleSheet(
+            active if self._shared_source == "unit_return" else inactive
+        )
+        self._btn_event_src.setStyleSheet(
+            active if self._shared_source == "event_return" else inactive
+        )
+
+    def _set_shared_source(self, source_type: str):
+        self._shared_source = source_type
+        is_unit = source_type == "unit_return"
+        if self._lbl_unit_src:
+            self._lbl_unit_src.setVisible(is_unit)
+            self.f_from_wh.setVisible(is_unit)
+        if self._lbl_event_src:
+            self._lbl_event_src.setVisible(not is_unit)
+            self.f_supplier.setVisible(not is_unit)
+        self._update_source_toggle_style()
+
     def _add_line(self, line: ReceiptLine | None = None):
         row = LineItemRow(self._item_types, show_price=self._show_price,
                           show_quality=self._show_quality, parent=self)
@@ -474,8 +529,12 @@ class NhapKhoFormDialog(QDialog):
         elif self._subtype == "event_return":
             self.f_supplier.setText(receipt.supplier)
         elif self._subtype == "shared_return":
-            _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
-            self.f_supplier.setText(receipt.supplier)
+            if receipt.from_warehouse_id:
+                self._set_shared_source("unit_return")
+                _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
+            else:
+                self._set_shared_source("event_return")
+                self.f_supplier.setText(receipt.supplier or "")
         else:
             _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
         self.f_person.setText(receipt.created_by)
@@ -507,8 +566,12 @@ class NhapKhoFormDialog(QDialog):
         elif self._subtype == "event_return":
             supplier = self.f_supplier.text().strip()
         elif self._subtype == "shared_return":
-            from_wh_id = self.f_from_wh.currentData()
-            supplier   = self.f_supplier.text().strip()
+            if self._shared_source == "unit_return":
+                from_wh_id = self.f_from_wh.currentData()
+                if not from_wh_id:
+                    return self._err("Vui lòng chọn Đơn Vị Trả.")
+            else:
+                supplier = self.f_supplier.text().strip()
         else:
             from_wh_id = self.f_from_wh.currentData()
             if not from_wh_id:

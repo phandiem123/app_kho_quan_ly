@@ -11,8 +11,8 @@ from database.receipts import delete as receipt_delete
 
 FONT = "Segoe UI"
 
-_TABS = ["Nhập Hàng Mới", "Nhập Từ Đơn Vị", "Đơn Vị Trả Về", "Sự Kiện Trả Về"]
-_SUBTYPES = ["new", "from_unit", "unit_return", "event_return"]
+_TABS = ["Nhập Hàng Mới", "Nhập Từ Đơn Vị", "Nhập Hàng Dùng Chung"]
+_SUBTYPES = ["new", "from_unit", "shared_return"]
 
 _COLS = [
     "STT", "Số Phiếu", "Số M.Hàng", "Kho Nhập",
