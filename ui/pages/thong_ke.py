@@ -4,10 +4,10 @@ from __future__ import annotations
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QPushButton, QLineEdit, QComboBox,
+    QPushButton, QLineEdit, QComboBox, QCompleter,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QCursor
+from PyQt6.QtGui import QFont, QCursor, QColor
 import datetime
 import database
 
@@ -454,11 +454,6 @@ class ThongKePage(QWidget):
 
 
 # ── Thin wrappers ─────────────────────────────────────────────────────────────
-
-class ThongKeDonViPage(ThongKePage):
-    def __init__(self):
-        super().__init__("don_vi")
-
 
 class ThongKeSharedPage(ThongKePage):
     def __init__(self):
@@ -943,6 +938,508 @@ class ThongKeKhoPage(QWidget):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 if red:
                     cell.setForeground(Qt.GlobalColor.red)
+                if tip:
+                    cell.setToolTip(tip)
+                self._table.setItem(ri, c, cell)
+
+
+# ── Per-unit tab page ─────────────────────────────────────────────────────────
+
+class ThongKeDonViPage(QWidget):
+    """Tồn kho tại Đơn Vị — mỗi đơn vị là một tab, niên hạn tính từ ngày nhập đơn vị."""
+
+    _COLS = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
+             "H1", "H2", "H3", "H4", "Tổng"]
+    _COLS_SEARCH = ["STT", "Đơn Vị", "Mã Hàng", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
+                    "H1", "H2", "H3", "H4", "Tổng"]
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet("ThongKeDonViPage { background: #fafafa; }")
+        self._wh_list: list = []
+        self._active_wh_id: int | None = None
+        self._raw: list = []
+        self._year_map: dict = {}
+        self._search_raw: list = []
+        self._search_year_map: dict = {}
+        self._was_searching: bool = False
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(36, 32, 36, 24)
+        root.setSpacing(0)
+
+        top = QHBoxLayout()
+        title = QLabel("Tồn Kho – Đơn Vị")
+        title.setFont(QFont(FONT, 18, QFont.Weight.Bold))
+        title.setStyleSheet("color: #111;")
+        top.addWidget(title)
+        top.addStretch()
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Tìm kiếm toàn đơn vị")
+        self._search.setFixedSize(260, 34)
+        self._search.setFont(QFont(FONT, 12))
+        self._search.setStyleSheet("""
+            QLineEdit { border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 12px; background: white; color: #111; }
+            QLineEdit:focus { border-color: #bbb; }
+        """)
+        self._search.textChanged.connect(self._apply_filter)
+        top.addWidget(self._search)
+        root.addLayout(top)
+        root.addSpacing(16)
+
+        # ── Searchable unit selector — hidden while cross-searching ──────────
+        self._unit_row = QWidget()
+        self._unit_row.setStyleSheet("background: transparent;")
+        unit_row_h = QHBoxLayout(self._unit_row)
+        unit_row_h.setContentsMargins(0, 0, 0, 16)
+        unit_row_h.setSpacing(10)
+
+        unit_lbl = QLabel("Đơn vị:")
+        unit_lbl.setFont(QFont(FONT, 12))
+        unit_lbl.setStyleSheet("color: #111;")
+        unit_row_h.addWidget(unit_lbl)
+
+        self._unit_combo = QComboBox()
+        self._unit_combo.setEditable(True)
+        self._unit_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._unit_combo.setMinimumWidth(300)
+        self._unit_combo.setFixedHeight(36)
+        self._unit_combo.setFont(QFont(FONT, 12))
+        self._unit_combo.setStyleSheet("""
+            QComboBox { border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 10px; background: white; color: #111; }
+            QComboBox:focus { border-color: #bbb; }
+            QComboBox::drop-down { border: none; width: 28px; }
+            QComboBox QAbstractItemView { border: 1px solid #ddd; border-radius: 6px;
+                background: white; color: #111;
+                selection-background-color: #f0f0f0; selection-color: #111; }
+        """)
+        cpl = QCompleter(self._unit_combo.model(), self._unit_combo)
+        cpl.setFilterMode(Qt.MatchFlag.MatchContains)
+        cpl.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._unit_combo.setCompleter(cpl)
+        self._unit_combo.currentIndexChanged.connect(self._on_unit_selected)
+        unit_row_h.addWidget(self._unit_combo)
+        unit_row_h.addStretch()
+        root.addWidget(self._unit_row)
+
+        # ── Summary cards ─────────────────────────────────────────────────────
+        card_h = QHBoxLayout()
+        card_h.setSpacing(12)
+        self._cards: dict[str, _SummaryCard] = {}
+        for key, label in [("total", "Tổng"), ("h1", "H1"), ("h2", "H2"),
+                            ("h3", "H3"), ("h4", "H4 (Chờ TXL)")]:
+            c = _SummaryCard(label, "—")
+            self._cards[key] = c
+            card_h.addWidget(c)
+        card_h.addStretch()
+
+        self._local_search = QLineEdit()
+        self._local_search.setPlaceholderText("Tìm trong đơn vị này...")
+        self._local_search.setFixedSize(220, 34)
+        self._local_search.setFont(QFont(FONT, 12))
+        self._local_search.setStyleSheet("""
+            QLineEdit { border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 12px; background: white; color: #111; }
+            QLineEdit:focus { border-color: #bbb; }
+        """)
+        self._local_search.textChanged.connect(self._apply_local_filter)
+        card_h.addWidget(self._local_search)
+        root.addLayout(card_h)
+        root.addSpacing(16)
+
+        # ── Table ─────────────────────────────────────────────────────────────
+        tbl_card = QFrame()
+        tbl_card.setStyleSheet(
+            "QFrame { background: white; border-radius: 12px; border: 1px solid #efefef; }"
+        )
+        tbl_v = QVBoxLayout(tbl_card)
+        tbl_v.setContentsMargins(0, 0, 0, 0)
+
+        self._table = QTableWidget(0, len(self._COLS))
+        self._table.setHorizontalHeaderLabels(self._COLS)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setShowGrid(False)
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._table.setStyleSheet(_TABLE_STYLE)
+
+        tbl_v.addWidget(self._table)
+        root.addWidget(tbl_card, 1)
+
+        self.refresh()
+
+    # ── Unit selector ─────────────────────────────────────────────────────────
+
+    def _rebuild_combo(self):
+        self._unit_combo.blockSignals(True)
+        self._unit_combo.clear()
+        for r in self._wh_list:
+            self._unit_combo.addItem(f"{r['code']} – {r['name']}", r["id"])
+        for i in range(self._unit_combo.count()):
+            if self._unit_combo.itemData(i) == self._active_wh_id:
+                self._unit_combo.setCurrentIndex(i)
+                break
+        self._unit_combo.blockSignals(False)
+
+    def _on_unit_selected(self, index: int):
+        if index < 0:
+            return
+        wh_id = self._unit_combo.itemData(index)
+        if wh_id is None or wh_id == self._active_wh_id:
+            return
+        self._active_wh_id = wh_id
+        self._search.clear()
+        self._reload_data()
+
+    def _configure_table(self, search_mode: bool):
+        cols = self._COLS_SEARCH if search_mode else self._COLS
+        self._table.setColumnCount(len(cols))
+        self._table.setHorizontalHeaderLabels(cols)
+        h = self._table.horizontalHeader()
+        specs = (
+            [
+                (QHeaderView.ResizeMode.Fixed, 52),
+                (QHeaderView.ResizeMode.Fixed, 90),
+                (QHeaderView.ResizeMode.Fixed, 100),
+                (QHeaderView.ResizeMode.Stretch, None),
+                (QHeaderView.ResizeMode.Fixed, 56),
+                (QHeaderView.ResizeMode.Fixed, 110),
+                (QHeaderView.ResizeMode.Fixed, 110),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 80),
+            ] if search_mode else [
+                (QHeaderView.ResizeMode.Fixed, 52),
+                (QHeaderView.ResizeMode.Fixed, 100),
+                (QHeaderView.ResizeMode.Stretch, None),
+                (QHeaderView.ResizeMode.Fixed, 56),
+                (QHeaderView.ResizeMode.Fixed, 110),
+                (QHeaderView.ResizeMode.Fixed, 110),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 72),
+                (QHeaderView.ResizeMode.Fixed, 80),
+            ]
+        )
+        for i, (mode, w) in enumerate(specs):
+            h.setSectionResizeMode(i, mode)
+            if w:
+                self._table.setColumnWidth(i, w)
+
+    # ── Data ──────────────────────────────────────────────────────────────────
+
+    def switch_to(self, wh_id: int):
+        self._active_wh_id = wh_id
+        self.refresh()
+
+    def refresh(self):
+        self._search_raw = []
+        self._was_searching = False
+        self._unit_row.setVisible(True)
+        self._configure_table(search_mode=False)
+        conn = database.get_conn()
+        rows = conn.execute(
+            "SELECT id, code, name, type FROM warehouses"
+            " WHERE is_active=1 AND type='DON_VI' ORDER BY name"
+        ).fetchall()
+        self._wh_list = rows
+        known_ids = {r["id"] for r in rows}
+        if self._active_wh_id not in known_ids:
+            self._active_wh_id = rows[0]["id"] if rows else None
+        self._rebuild_combo()
+        self._reload_data()
+
+    def _reload_data(self):
+        if self._active_wh_id is None:
+            self._raw = []
+            self._update_cards([])
+            self._apply_local_filter()
+            return
+        conn = database.get_conn()
+        rows = conn.execute("""
+            SELECT t.id AS item_type_id,
+                   t.code AS item_code, t.name AS item_name,
+                   t.unit_of_measure,
+                   t.total_lifespan_months,
+                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
+                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
+                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
+                   SUM(i.quantity) AS total,
+                   MAX(CASE
+                       WHEN i.received_at_unit_date IS NOT NULL
+                       THEN CAST(
+                           (julianday(date('now','localtime'))
+                            - julianday(i.received_at_unit_date)) / 30.44 AS INTEGER)
+                       ELSE NULL
+                   END) AS max_months
+            FROM inventory i
+            JOIN item_types t ON t.id = i.item_type_id
+            WHERE i.warehouse_id = ? AND i.is_shared = 0 AND i.quantity > 0
+            GROUP BY t.id
+            ORDER BY t.name
+        """, (self._active_wh_id,)).fetchall()
+        self._raw = rows
+
+        year = str(datetime.date.today().year)
+        wh_id = self._active_wh_id
+        yr_rows = conn.execute("""
+            SELECT sub.item_type_id, sub.ql,
+                   SUM(sub.nhap) AS nhap, SUM(sub.xuat) AS xuat
+            FROM (
+                SELECT tl.item_type_id, tl.quality_level_to AS ql,
+                       tl.quantity AS nhap, 0 AS xuat
+                FROM transaction_lines tl
+                JOIN transactions tx ON tx.id = tl.transaction_id
+                WHERE tx.to_warehouse_id = ?
+                  AND strftime('%Y', tx.transaction_date) = ?
+                  AND tl.quality_level_to IS NOT NULL
+                UNION ALL
+                SELECT tl.item_type_id, tl.quality_level_from AS ql,
+                       0 AS nhap, tl.quantity AS xuat
+                FROM transaction_lines tl
+                JOIN transactions tx ON tx.id = tl.transaction_id
+                WHERE tx.from_warehouse_id = ?
+                  AND strftime('%Y', tx.transaction_date) = ?
+                  AND tl.quality_level_from IS NOT NULL
+            ) sub
+            GROUP BY sub.item_type_id, sub.ql
+        """, (wh_id, year, wh_id, year)).fetchall()
+        self._year_map = {
+            (r["item_type_id"], r["ql"]): (r["nhap"], r["xuat"])
+            for r in yr_rows
+        }
+
+        self._update_cards(rows)
+        self._apply_local_filter()
+
+    def _load_search_data(self):
+        conn = database.get_conn()
+        year = str(datetime.date.today().year)
+        self._search_raw = conn.execute("""
+            SELECT w.id AS wh_id, w.code AS wh_code, w.name AS wh_name,
+                   t.id AS item_type_id,
+                   t.code AS item_code, t.name AS item_name,
+                   t.unit_of_measure,
+                   t.total_lifespan_months,
+                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
+                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
+                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
+                   SUM(i.quantity) AS total,
+                   MAX(CASE
+                       WHEN i.received_at_unit_date IS NOT NULL
+                       THEN CAST(
+                           (julianday(date('now','localtime'))
+                            - julianday(i.received_at_unit_date)) / 30.44 AS INTEGER)
+                       ELSE NULL
+                   END) AS max_months
+            FROM inventory i
+            JOIN warehouses w ON w.id = i.warehouse_id
+            JOIN item_types t ON t.id = i.item_type_id
+            WHERE i.is_shared = 0 AND i.quantity > 0
+              AND w.type = 'DON_VI' AND w.is_active = 1
+            GROUP BY w.id, t.id
+            ORDER BY t.name, w.name
+        """).fetchall()
+
+        yr_rows = conn.execute("""
+            SELECT sub.wh_id, sub.item_type_id, sub.ql,
+                   SUM(sub.nhap) AS nhap, SUM(sub.xuat) AS xuat
+            FROM (
+                SELECT tx.to_warehouse_id AS wh_id,
+                       tl.item_type_id, tl.quality_level_to AS ql,
+                       tl.quantity AS nhap, 0 AS xuat
+                FROM transaction_lines tl
+                JOIN transactions tx ON tx.id = tl.transaction_id
+                JOIN warehouses w ON w.id = tx.to_warehouse_id
+                WHERE w.type = 'DON_VI' AND w.is_active = 1
+                  AND strftime('%Y', tx.transaction_date) = ?
+                  AND tl.quality_level_to IS NOT NULL
+                UNION ALL
+                SELECT tx.from_warehouse_id AS wh_id,
+                       tl.item_type_id, tl.quality_level_from AS ql,
+                       0 AS nhap, tl.quantity AS xuat
+                FROM transaction_lines tl
+                JOIN transactions tx ON tx.id = tl.transaction_id
+                JOIN warehouses w ON w.id = tx.from_warehouse_id
+                WHERE w.type = 'DON_VI' AND w.is_active = 1
+                  AND strftime('%Y', tx.transaction_date) = ?
+                  AND tl.quality_level_from IS NOT NULL
+            ) sub
+            GROUP BY sub.wh_id, sub.item_type_id, sub.ql
+        """, (year, year)).fetchall()
+        self._search_year_map = {
+            (r["wh_id"], r["item_type_id"], r["ql"]): (r["nhap"], r["xuat"])
+            for r in yr_rows
+        }
+
+    def _update_cards(self, rows):
+        self._cards["total"].set_value(str(sum(r["total"] for r in rows)))
+        for ql in ("h1", "h2", "h3", "h4"):
+            self._cards[ql].set_value(str(sum(r[ql] for r in rows)))
+
+    def _apply_filter(self):
+        q = self._search.text().strip().lower()
+        is_searching = bool(q)
+
+        if is_searching and not self._was_searching:
+            self._load_search_data()
+            self._configure_table(search_mode=True)
+            self._unit_row.setVisible(False)
+            self._local_search.setVisible(False)
+            self._local_search.clear()
+        elif not is_searching and self._was_searching:
+            self._configure_table(search_mode=False)
+            self._unit_row.setVisible(True)
+            self._local_search.setVisible(True)
+
+        self._was_searching = is_searching
+
+        if is_searching:
+            rows = [r for r in self._search_raw
+                    if q in r["item_name"].lower() or q in r["item_code"].lower()
+                    or q in r["wh_name"].lower() or q in r["wh_code"].lower()]
+            self._load_table(rows, search_mode=True)
+        else:
+            self._apply_local_filter()
+
+    def _apply_local_filter(self):
+        q = self._local_search.text().strip().lower()
+        rows = self._raw if not q else [
+            r for r in self._raw
+            if q in r["item_name"].lower() or q in r["item_code"].lower()
+        ]
+        self._load_table(rows, search_mode=False)
+
+    @staticmethod
+    def _fmt_months(mm: int) -> str:
+        y, m = divmod(mm, 12)
+        if y > 0 and m > 0:
+            return f"{y} năm {m} tháng"
+        return f"{y} năm" if y > 0 else f"{mm} tháng"
+
+    def _load_table(self, rows, search_mode: bool = False):
+        self._table.setRowCount(0)
+        _orange = QColor(204, 102, 0)
+
+        for i, r in enumerate(rows):
+            ri = self._table.rowCount()
+            self._table.insertRow(ri)
+            self._table.setRowHeight(ri, 48)
+
+            mm = r["max_months"]
+            lifespan = r["total_lifespan_months"]
+
+            # ── Tại ĐV ────────────────────────────────────────────────────
+            if mm is None:
+                tai_dv, tai_dv_clr = "—", None
+            else:
+                tai_dv = self._fmt_months(mm)
+                if mm >= lifespan:
+                    tai_dv_clr = "red"   # hết niên hạn → H4
+                elif mm >= 12:
+                    tai_dv_clr = "orange"  # đang H2/H3
+                else:
+                    tai_dv_clr = None    # còn H1
+
+            # ── Còn Lại ───────────────────────────────────────────────────
+            if mm is None:
+                con_lai, con_lai_clr = "—", None
+            else:
+                rem = lifespan - mm
+                if rem <= 0:
+                    con_lai, con_lai_clr = "Hết niên hạn", "red"
+                elif rem <= 12:
+                    con_lai, con_lai_clr = self._fmt_months(rem), "orange"
+                else:
+                    con_lai, con_lai_clr = self._fmt_months(rem), None
+
+            tid = r["item_type_id"]
+
+            def _tip(ql: str, current: int) -> str:
+                if search_mode:
+                    nhap, xuat = self._search_year_map.get((r["wh_id"], tid, ql), (0, 0))
+                else:
+                    nhap, xuat = self._year_map.get((tid, ql), (0, 0))
+                so_du = current - nhap + xuat
+
+                def _row(label, val, last=False):
+                    sep = "" if last else "border-bottom: 1px solid #ebebeb;"
+                    return (
+                        f'<tr>'
+                        f'<td style="padding: 9px 28px 9px 0; color: #111; {sep}">{label}</td>'
+                        f'<td style="padding: 9px 0; color: #111; font-weight: 600;'
+                        f' text-align: right; {sep}">{val}</td>'
+                        f'</tr>'
+                    )
+
+                return (
+                    '<table style="font-family: \'Segoe UI\'; font-size: 13px;'
+                    ' min-width: 230px; border-spacing: 0;">'
+                    '<tr><td colspan="2" style="padding: 0 0 10px 0;">'
+                    '<b style="font-size: 14px; color: #111;">Thông tin Chi tiết</b>'
+                    '</td></tr>'
+                    + _row("Số dư đầu năm", so_du)
+                    + _row("Tổng nhập", nhap)
+                    + _row("Tổng xuất", xuat)
+                    + _row("Hiện tại", current, last=True)
+                    + '</table>'
+                )
+
+            if search_mode:
+                cells = [
+                    (str(i + 1),           True,  None,        None),
+                    (r["wh_code"],         True,  None,        None),
+                    (r["item_code"],       False, None,        None),
+                    (r["item_name"],       False, None,        None),
+                    (r["unit_of_measure"], True,  None,        None),
+                    (tai_dv,               True,  tai_dv_clr,  None),
+                    (con_lai,              True,  con_lai_clr, None),
+                    (str(r["h1"]),         True,  None,        _tip("H1", r["h1"])),
+                    (str(r["h2"]),         True,  None,        _tip("H2", r["h2"])),
+                    (str(r["h3"]),         True,  None,        _tip("H3", r["h3"])),
+                    (str(r["h4"]),         True,  "red" if r["h4"] > 0 else None,
+                                                               _tip("H4", r["h4"])),
+                    (str(r["total"]),      True,  None,        None),
+                ]
+            else:
+                cells = [
+                    (str(i + 1),           True,  None,        None),
+                    (r["item_code"],       False, None,        None),
+                    (r["item_name"],       False, None,        None),
+                    (r["unit_of_measure"], True,  None,        None),
+                    (tai_dv,               True,  tai_dv_clr,  None),
+                    (con_lai,              True,  con_lai_clr, None),
+                    (str(r["h1"]),         True,  None,        _tip("H1", r["h1"])),
+                    (str(r["h2"]),         True,  None,        _tip("H2", r["h2"])),
+                    (str(r["h3"]),         True,  None,        _tip("H3", r["h3"])),
+                    (str(r["h4"]),         True,  "red" if r["h4"] > 0 else None,
+                                                               _tip("H4", r["h4"])),
+                    (str(r["total"]),      True,  None,        None),
+                ]
+
+            for c, (val, center, clr, tip) in enumerate(cells):
+                cell = QTableWidgetItem(val)
+                cell.setFont(QFont(FONT, 12))
+                if center:
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if clr == "red":
+                    cell.setForeground(Qt.GlobalColor.red)
+                elif clr == "orange":
+                    cell.setForeground(_orange)
                 if tip:
                     cell.setToolTip(tip)
                 self._table.setItem(ri, c, cell)

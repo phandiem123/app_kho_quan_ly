@@ -38,12 +38,23 @@ BTN_SECONDARY = """
     }
     QPushButton:hover { background: #f5f5f5; }
 """
+BTN_GRAY = """
+    QPushButton {
+        background: #666;
+        color: white;
+        border-radius: 6px;
+        padding: 6px 14px;
+        border: none;
+    }
+    QPushButton:hover { background: #555; }
+"""
 
 
 class _Card(QFrame):
     def __init__(self, title: str, description: str,
                  primary_label: str, primary_cb,
-                 secondary_label: str | None = None, secondary_cb=None):
+                 secondary_label: str | None = None, secondary_cb=None,
+                 tertiary_label: str | None = None, tertiary_cb=None):
         super().__init__()
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(CARD_STYLE)
@@ -66,6 +77,13 @@ class _Card(QFrame):
         row = QHBoxLayout()
         row.setSpacing(8)
         row.addStretch()
+
+        if tertiary_label and tertiary_cb:
+            tb = QPushButton(tertiary_label)
+            tb.setFont(QFont(FONT, 11))
+            tb.setStyleSheet(BTN_GRAY)
+            tb.clicked.connect(tertiary_cb)
+            row.addWidget(tb)
 
         if secondary_label and secondary_cb:
             sb = QPushButton(secondary_label)
@@ -122,6 +140,25 @@ class ExportImportPage(QWidget):
         ))
         v.addLayout(export_row)
 
+        export_row2 = QHBoxLayout()
+        export_row2.setSpacing(16)
+        export_row2.addWidget(_Card(
+            "Phiếu Nhập Kho",
+            "Xuất toàn bộ phiếu nhập kho (số phiếu, ngày, kho, mặt hàng, số lượng) ra file Excel.",
+            "Xuất Excel", self._export_receipts,
+        ))
+        export_row2.addWidget(_Card(
+            "Phiếu Xuất Kho",
+            "Xuất toàn bộ phiếu xuất kho (số phiếu, ngày, kho, mặt hàng, số lượng) ra file Excel.",
+            "Xuất Excel", self._export_issues,
+        ))
+        export_row2.addWidget(_Card(
+            "Phiếu Luân Chuyển",
+            "Xuất toàn bộ phiếu luân chuyển nội bộ (kho nguồn, kho đích, mặt hàng) ra file Excel.",
+            "Xuất Excel", self._export_transfers,
+        ))
+        v.addLayout(export_row2)
+
         # ── Nhập dữ liệu ──────────────────────────────────────────────────────
         v.addWidget(_section_header("NHẬP DỮ LIỆU"))
 
@@ -132,12 +169,14 @@ class ExportImportPage(QWidget):
             "Nhập danh sách mặt hàng từ file Excel. Mã đã tồn tại sẽ được cập nhật.",
             "Nhập từ Excel", self._import_item_types,
             secondary_label="Tải Mẫu", secondary_cb=self._template_item_types,
+            tertiary_label="Xuất Excel", tertiary_cb=self._export_item_types,
         ))
         import_row.addWidget(_Card(
             "Danh Sách Kho / Đơn Vị",
             "Nhập danh sách kho/đơn vị từ file Excel. Mã đã tồn tại sẽ được cập nhật.",
             "Nhập từ Excel", self._import_warehouses,
             secondary_label="Tải Mẫu", secondary_cb=self._template_warehouses,
+            tertiary_label="Xuất Excel", tertiary_cb=self._export_warehouses,
         ))
         import_row.addStretch()
         v.addLayout(import_row)
@@ -280,6 +319,96 @@ class ExportImportPage(QWidget):
             _auto_width(ws)
             wb.save(path)
             QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} kho/đơn vị.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _export_receipts(self):
+        self._export_transactions("NHAP_KHO", "Xuất Phiếu Nhập Kho", "phieu_nhap_kho.xlsx", "Nhập Kho")
+
+    def _export_issues(self):
+        self._export_transactions("XUAT_KHO", "Xuất Phiếu Xuất Kho", "phieu_xuat_kho.xlsx", "Xuất Kho")
+
+    def _export_transfers(self):
+        self._export_transactions(
+            ("LUAN_CHUYEN_KHO", "LUAN_CHUYEN_DV"),
+            "Xuất Phiếu Luân Chuyển", "phieu_luan_chuyen.xlsx", "Luân Chuyển",
+        )
+
+    def _export_transactions(self, tx_type, dialog_title: str, default_name: str, sheet_name: str):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(self, dialog_title, default_name, "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            import openpyxl
+
+            conn = database.get_conn()
+            if isinstance(tx_type, tuple):
+                placeholders = ",".join("?" * len(tx_type))
+                sql = f"""
+                    SELECT tx.reference_number, tx.transaction_date, tx.created_by, tx.notes AS tx_notes,
+                           wf.code AS from_code, wf.name AS from_name,
+                           wt.code AS to_code,   wt.name AS to_name,
+                           t.code AS item_code,  t.name AS item_name, t.unit_of_measure,
+                           tl.quality_level_from, tl.quality_level_to, tl.quantity,
+                           tl.lot_number, tl.notes AS line_notes
+                    FROM transactions tx
+                    JOIN transaction_lines tl ON tl.transaction_id = tx.id
+                    JOIN item_types t  ON t.id  = tl.item_type_id
+                    LEFT JOIN warehouses wf ON wf.id = tx.from_warehouse_id
+                    LEFT JOIN warehouses wt ON wt.id = tx.to_warehouse_id
+                    WHERE tx.type IN ({placeholders})
+                    ORDER BY tx.transaction_date DESC, tx.id, tl.id
+                """
+                rows = conn.execute(sql, tx_type).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT tx.reference_number, tx.transaction_date, tx.created_by, tx.notes AS tx_notes,
+                           wf.code AS from_code, wf.name AS from_name,
+                           wt.code AS to_code,   wt.name AS to_name,
+                           t.code AS item_code,  t.name AS item_name, t.unit_of_measure,
+                           tl.quality_level_from, tl.quality_level_to, tl.quantity,
+                           tl.lot_number, tl.notes AS line_notes
+                    FROM transactions tx
+                    JOIN transaction_lines tl ON tl.transaction_id = tx.id
+                    JOIN item_types t  ON t.id  = tl.item_type_id
+                    LEFT JOIN warehouses wf ON wf.id = tx.from_warehouse_id
+                    LEFT JOIN warehouses wt ON wt.id = tx.to_warehouse_id
+                    WHERE tx.type = ?
+                    ORDER BY tx.transaction_date DESC, tx.id, tl.id
+                """, (tx_type,)).fetchall()
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = sheet_name
+
+            _write_header(ws, [
+                "Số Phiếu", "Ngày", "Người Lập", "Ghi Chú Phiếu",
+                "Mã Kho Từ", "Tên Kho Từ", "Mã Kho Đến", "Tên Kho Đến",
+                "Mã Hàng", "Tên Hàng", "ĐVT",
+                "Mức HH Từ", "Mức HH Đến", "Số Lượng",
+                "Số Lô", "Ghi Chú Dòng",
+            ])
+            for r in rows:
+                ws.append([
+                    r["reference_number"] or "",
+                    r["transaction_date"] or "",
+                    r["created_by"] or "",
+                    r["tx_notes"] or "",
+                    r["from_code"] or "", r["from_name"] or "",
+                    r["to_code"] or "",   r["to_name"] or "",
+                    r["item_code"], r["item_name"], r["unit_of_measure"],
+                    r["quality_level_from"] or "",
+                    r["quality_level_to"],
+                    r["quantity"],
+                    r["lot_number"] or "",
+                    r["line_notes"] or "",
+                ])
+
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", str(e))
 
