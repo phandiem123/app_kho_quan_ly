@@ -80,7 +80,7 @@ class _ItemRow(QWidget):
         h.addWidget(self.lbl_max)
 
         if show_months and item.months_at_unit is not None:
-            mo = QLabel(f"{item.months_at_unit} tháng")
+            mo = QLabel(f"{item.months_at_unit // 12} năm")
             mo.setFont(QFont(FONT, 10))
             mo.setFixedWidth(70)
             mo.setAlignment(Qt.AlignmentFlag.AlignCenter)

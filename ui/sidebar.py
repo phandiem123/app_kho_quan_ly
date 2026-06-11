@@ -132,7 +132,7 @@ class Sidebar(QWidget):
         self._add_item(v, "◎", "Tại Đơn Vị", "txl_don_vi")
 
         v.addWidget(SectionHeader("Dữ Liệu"))
-        self._add_item(v, "⇅", "Export / Import", "export_import")
+        self._add_item(v, "⇅", "Nhập Dữ liệu/Xuất dữ liệu", "export_import")
 
         v.addStretch()
         scroll.setWidget(nav_widget)

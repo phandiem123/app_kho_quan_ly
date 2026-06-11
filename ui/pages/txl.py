@@ -474,7 +474,7 @@ class TxlPage(QWidget):
 def _h4_columns(wh_type: str) -> list[str]:
     cols = ["STT", "Kho / ĐV", "Mã Hàng", "Tên Hàng", "ĐVT", "H4"]
     if wh_type == "DON_VI":
-        cols += ["Ngày Nhận ĐV", "Tháng Tại ĐV"]
+        cols += ["Ngày Nhận ĐV", "Niên Hạn (Năm)"]
     cols += ["Số Lô", "Ghi Chú"]
     return cols
 
@@ -491,7 +491,7 @@ def _h4_cells(i: int, item, show_months: bool):
     if show_months:
         cells.append((item.received_at_unit_date or "—", True, None))
         mo = item.months_at_unit
-        cells.append((f"{mo} tháng" if mo is not None else "—", True,
+        cells.append((f"{mo // 12} năm" if mo is not None else "—", True,
                        "red" if mo and mo >= 24 else None))
     cells += [
         (item.lot_number or "—", True, None),

@@ -154,6 +154,26 @@ def _upsert_inv(conn, wh_id, item_type_id, quality, qty, is_shared=0):
         """, (wh_id, item_type_id, quality, qty, is_shared))
 
 
+def _upsert_inv_dated(conn, wh_id, item_type_id, quality, qty, received_at_unit_date):
+    """Upsert inventory preserving a specific received_at_unit_date (for items returned from units)."""
+    row = conn.execute("""
+        SELECT id FROM inventory
+        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
+          AND COALESCE(received_at_unit_date,'') = COALESCE(?,'')
+          AND is_shared=0
+        LIMIT 1
+    """, (wh_id, item_type_id, quality, received_at_unit_date)).fetchone()
+    if row:
+        conn.execute("UPDATE inventory SET quantity=quantity+? WHERE id=?",
+                     (qty, row["id"]))
+    else:
+        conn.execute("""
+            INSERT INTO inventory
+                (warehouse_id, item_type_id, quality_level, quantity, received_at_unit_date)
+            VALUES (?, ?, ?, ?, ?)
+        """, (wh_id, item_type_id, quality, qty, received_at_unit_date))
+
+
 def insert(receipt: Receipt) -> int:
     conn = database.get_conn()
     subtype = receipt.subtype
@@ -181,11 +201,17 @@ def insert(receipt: Receipt) -> int:
         if subtype == "new":
             _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity)
         elif subtype == "from_unit" and receipt.from_warehouse_id:
+            src = conn.execute("""
+                SELECT received_at_unit_date FROM inventory
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND quantity > 0
+                ORDER BY COALESCE(received_at_unit_date,'9999') ASC LIMIT 1
+            """, (receipt.from_warehouse_id, line.item_type_id, ql)).fetchone()
+            rad = src["received_at_unit_date"] if src else None
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
                 WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
             """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql))
-            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, ql, line.quantity)
+            _upsert_inv_dated(conn, receipt.to_warehouse_id, line.item_type_id, ql, line.quantity, rad)
         elif subtype in ("unit_return", "shared_return") and receipt.from_warehouse_id:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
@@ -256,11 +282,17 @@ def update(receipt: Receipt) -> None:
         if subtype == "new":
             _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity)
         elif subtype == "from_unit" and receipt.from_warehouse_id:
+            src = conn.execute("""
+                SELECT received_at_unit_date FROM inventory
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND quantity > 0
+                ORDER BY COALESCE(received_at_unit_date,'9999') ASC LIMIT 1
+            """, (receipt.from_warehouse_id, line.item_type_id, ql)).fetchone()
+            rad = src["received_at_unit_date"] if src else None
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
                 WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
             """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql))
-            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, ql, line.quantity)
+            _upsert_inv_dated(conn, receipt.to_warehouse_id, line.item_type_id, ql, line.quantity, rad)
         elif subtype in ("unit_return", "shared_return") and receipt.from_warehouse_id:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)

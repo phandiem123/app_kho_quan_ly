@@ -303,7 +303,7 @@ class NhapKhoFormDialog(QDialog):
             self._btn_event_src = QPushButton("Sự Kiện")
             for _b in (self._btn_unit_src, self._btn_event_src):
                 _b.setFont(QFont(FONT, 11))
-                _b.setFixedHeight(26)
+                _b.setFixedHeight(26)/
                 _b.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                 tgl_h.addWidget(_b)
             self._btn_unit_src.clicked.connect(lambda: self._set_shared_source("unit_return"))

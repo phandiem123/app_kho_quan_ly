@@ -84,6 +84,8 @@ class MainWindow(QMainWindow):
 
 def _register_lazy_pages():
     from ui.pages.nhap_kho import NhapKhoPage
+    from ui.pages.xuat_kho import XuatKhoPage
+    from ui.pages.luan_chuyen import LuanChuyenPage
     from ui.pages.export_import import ExportImportPage
     from ui.pages.txl import TxlKhoPage, TxlDonViPage
     from ui.pages.thong_ke import ThongKeKhoPage, ThongKeDonViPage, ThongKeSharedPage
@@ -91,6 +93,8 @@ def _register_lazy_pages():
     MainWindow._LAZY["don_vi"] = ThongKeDonViPage
     MainWindow._LAZY["txl_chung"] = ThongKeSharedPage
     MainWindow._LAZY["nhap_kho"] = NhapKhoPage
+    MainWindow._LAZY["xuat_kho"] = XuatKhoPage
+    MainWindow._LAZY["luan_chuyen"] = LuanChuyenPage
     MainWindow._LAZY["export_import"] = ExportImportPage
     MainWindow._LAZY["txl_kho"] = TxlKhoPage
     MainWindow._LAZY["txl_don_vi"] = TxlDonViPage
