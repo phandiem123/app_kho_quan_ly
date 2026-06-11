@@ -613,9 +613,367 @@ class ThongKePage(QWidget):
 
 # ── Thin wrappers ─────────────────────────────────────────────────────────────
 
-class ThongKeSharedPage(ThongKePage):
+class ThongKeSharedPage(QWidget):
+    """Hàng dùng chung – tồn kho (H1–H3), đang cho mượn, chờ thanh xử lý (H4)."""
+
+    _COLS_TON  = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "H1", "H2", "H3", "Tồn Kho"]
+    _COLS_MUON = ["STT", "Số Phiếu", "Ngày Mượn", "Mã Hàng", "Tên Hàng",
+                  "ĐVT", "Số Lượng", "Đơn Vị / Người Mượn"]
+    _COLS_TXL  = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"]
+
+    _TABS = [
+        ("muon", "Đang Cho Mượn"),
+        ("txl",  "Chờ TXL (H4)"),
+    ]
+
     def __init__(self):
-        super().__init__("shared")
+        super().__init__()
+        self.setStyleSheet("ThongKeSharedPage { background: #fafafa; }")
+        self._active_tab   = "muon"
+        self._active_wh_id: int | None = None
+        self._raw_ton:  list = []
+        self._raw_muon: list = []
+        self._raw_txl:  list = []
+        self._build_ui()
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(36, 32, 36, 24)
+        root.setSpacing(0)
+
+        top = QHBoxLayout()
+        title = QLabel("Hàng Dùng Chung")
+        title.setFont(QFont(FONT, 18, QFont.Weight.Bold))
+        title.setStyleSheet("color: #111;")
+        top.addWidget(title)
+        top.addStretch()
+
+        _btn_style = """
+            QPushButton { border: none; border-radius: 8px; padding: 0 16px;
+                font-size: 12px; font-weight: 600; }
+            QPushButton:hover { opacity: 0.85; }
+        """
+        btn_xuat = QPushButton("+ Xuất Cho Mượn")
+        btn_xuat.setFixedHeight(34)
+        btn_xuat.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        btn_xuat.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_xuat.setStyleSheet(_btn_style + "QPushButton { background: #2563eb; color: white; }")
+        btn_xuat.clicked.connect(self._on_xuat_cho_muon)
+        top.addWidget(btn_xuat)
+        top.addSpacing(16)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Tìm mặt hàng...")
+        self._search.setFixedSize(220, 34)
+        self._search.setFont(QFont(FONT, 12))
+        self._search.setStyleSheet("""
+            QLineEdit { border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 12px; background: white; color: #111; }
+            QLineEdit:focus { border-color: #bbb; }
+        """)
+        self._search.textChanged.connect(self._apply_filter)
+        top.addWidget(self._search)
+
+        self._wh_combo = QComboBox()
+        self._wh_combo.setFixedHeight(34)
+        self._wh_combo.setMinimumWidth(200)
+        self._wh_combo.setFont(QFont(FONT, 12))
+        self._wh_combo.setStyleSheet("""
+            QComboBox { border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 32px 0 12px; background: white; color: #111; }
+            QComboBox::drop-down { subcontrol-origin: padding;
+                subcontrol-position: center right; width: 28px;
+                border-left: 1px solid #e0e0e0;
+                border-top-right-radius: 8px; border-bottom-right-radius: 8px;
+                background: white; }
+            QComboBox::down-arrow { width: 10px; height: 10px; image: none;
+                border-top: 5px solid #111;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent; }
+            QComboBox QAbstractItemView { border: 1px solid #e0e0e0;
+                border-radius: 6px; background: white; color: #111;
+                selection-background-color: #f0f0f0; }
+        """)
+        self._wh_combo.currentIndexChanged.connect(self._on_wh_changed)
+        top.addWidget(self._wh_combo)
+        root.addLayout(top)
+        root.addSpacing(20)
+
+        # summary cards
+        card_h = QHBoxLayout()
+        card_h.setSpacing(14)
+        self._cards: dict[str, _SummaryCard] = {}
+        for key, label in [
+            ("ton",      "Tồn Kho (H1–H3)"),
+            ("muon",     "Đang Cho Mượn"),
+            ("san_sang", "Sẵn Sàng"),
+            ("txl",      "Chờ TXL (H4)"),
+        ]:
+            c = _SummaryCard(label, "—")
+            self._cards[key] = c
+            card_h.addWidget(c)
+        card_h.addStretch()
+        root.addLayout(card_h)
+        root.addSpacing(16)
+
+        # tab bar
+        tab_frame = QFrame()
+        tab_frame.setFixedHeight(44)
+        tab_frame.setStyleSheet("QFrame { border: none; background: transparent; }")
+        tab_h = QHBoxLayout(tab_frame)
+        tab_h.setContentsMargins(0, 4, 0, 4)
+        tab_h.setSpacing(6)
+        self._tab_btns: dict[str, QPushButton] = {}
+        for key, label in self._TABS:
+            btn = QPushButton(label)
+            btn.setFont(QFont(FONT, 11))
+            btn.setFixedHeight(32)
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self._tab_btns[key] = btn
+            btn.clicked.connect(lambda _, k=key: self._on_tab(k))
+            tab_h.addWidget(btn)
+        tab_h.addStretch()
+        self._apply_tab_style()
+        root.addWidget(tab_frame)
+        root.addSpacing(8)
+
+        # table card
+        tbl_card = QFrame()
+        tbl_card.setStyleSheet(
+            "QFrame { background: white; border-radius: 12px; border: 1px solid #efefef; }"
+        )
+        tbl_v = QVBoxLayout(tbl_card)
+        tbl_v.setContentsMargins(0, 0, 0, 0)
+
+        self._table = QTableWidget(0, len(self._COLS_TON))
+        self._table.setHorizontalHeaderLabels(self._COLS_TON)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setShowGrid(False)
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._table.setStyleSheet(_TABLE_STYLE)
+        tbl_v.addWidget(self._table)
+        root.addWidget(tbl_card, 1)
+
+        self.refresh()
+
+    def _apply_tab_style(self):
+        for key, btn in self._tab_btns.items():
+            if key == self._active_tab:
+                btn.setStyleSheet("""
+                    QPushButton { border: none; border-radius: 7px; padding: 0 14px;
+                        background: #111; color: white; font-size: 11px; font-weight: 600; }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton { border: 1px solid #e0e0e0; border-radius: 7px; padding: 0 14px;
+                        background: white; color: #111; font-size: 11px; }
+                    QPushButton:hover { background: #f5f5f5; color: #111; }
+                """)
+
+    # ── Interactions ──────────────────────────────────────────────────────────
+
+    def _on_tab(self, key: str):
+        self._active_tab = key
+        self._apply_tab_style()
+        self._apply_filter()
+
+    def _on_wh_changed(self, _):
+        self._active_wh_id = self._wh_combo.currentData()
+        self._reload_data()
+
+    def _on_xuat_cho_muon(self):
+        from ui.dialogs.xuat_kho_form import XuatKhoFormDialog
+        dlg = XuatKhoFormDialog(self, subtype="shared_loan")
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    # ── Data ──────────────────────────────────────────────────────────────────
+
+    def refresh(self):
+        self._reload_warehouses()
+        self._reload_data()
+
+    def _reload_warehouses(self):
+        current = self._wh_combo.currentData()
+        self._wh_combo.blockSignals(True)
+        self._wh_combo.clear()
+        self._wh_combo.addItem("Tất cả kho", None)
+        conn = database.get_conn()
+        for r in conn.execute(
+            "SELECT id, code, name FROM warehouses"
+            " WHERE type='TONG' AND is_active=1 ORDER BY name"
+        ).fetchall():
+            self._wh_combo.addItem(f"{r['code']} – {r['name']}", r["id"])
+        for i in range(self._wh_combo.count()):
+            if self._wh_combo.itemData(i) == current:
+                self._wh_combo.setCurrentIndex(i)
+                break
+        self._wh_combo.blockSignals(False)
+        self._active_wh_id = self._wh_combo.currentData()
+
+    def _reload_data(self):
+        conn = database.get_conn()
+        wh_id  = self._active_wh_id
+        inv_f  = "AND i.warehouse_id = ?" if wh_id else ""
+        muon_f = "AND tx.from_warehouse_id = ?" if wh_id else ""
+        p = [wh_id] if wh_id else []
+
+        # Tab 1: Tồn kho H1/H2/H3
+        self._raw_ton = conn.execute(f"""
+            SELECT t.id AS item_type_id, t.code AS item_code,
+                   t.name AS item_name, t.unit_of_measure,
+                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
+                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
+                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                   SUM(CASE WHEN i.quality_level IN ('H1','H2','H3')
+                             THEN i.quantity ELSE 0 END) AS total
+            FROM inventory i
+            JOIN item_types t ON t.id = i.item_type_id
+            WHERE i.is_shared=1 AND i.quality_level IN ('H1','H2','H3') {inv_f}
+            GROUP BY t.id HAVING total > 0 ORDER BY t.name
+        """, p).fetchall()
+
+        # Tab 2: Đang cho mượn (giao dịch type MUON)
+        self._raw_muon = conn.execute(f"""
+            SELECT tx.transaction_date, tx.reference_number,
+                   t.code AS item_code, t.name AS item_name, t.unit_of_measure,
+                   tl.quantity,
+                   COALESCE(wto.name, tx.supplier, '') AS borrower
+            FROM transactions tx
+            JOIN transaction_lines tl ON tl.transaction_id = tx.id
+            JOIN item_types t ON t.id = tl.item_type_id
+            LEFT JOIN warehouses wto ON wto.id = tx.to_warehouse_id
+            WHERE tx.type='MUON' {muon_f}
+            ORDER BY tx.transaction_date DESC, tx.id DESC, tl.id
+        """, p).fetchall()
+
+        # Tab 3: Chờ TXL – H4 shared
+        self._raw_txl = conn.execute(f"""
+            SELECT t.id AS item_type_id, t.code AS item_code,
+                   t.name AS item_name, t.unit_of_measure,
+                   SUM(i.quantity) AS total
+            FROM inventory i
+            JOIN item_types t ON t.id = i.item_type_id
+            WHERE i.is_shared=1 AND i.quality_level='H4' {inv_f}
+            GROUP BY t.id HAVING total > 0 ORDER BY t.name
+        """, p).fetchall()
+
+        ton  = sum(r["total"]    for r in self._raw_ton)
+        muon = sum(r["quantity"] for r in self._raw_muon)
+        txl  = sum(r["total"]    for r in self._raw_txl)
+        self._cards["ton"].set_value(str(ton))
+        self._cards["muon"].set_value(str(muon))
+        self._cards["san_sang"].set_value(str(max(0, ton - muon)))
+        self._cards["txl"].set_value(str(txl))
+        self._apply_filter()
+
+    def _apply_filter(self):
+        q = self._search.text().strip().lower()
+        if self._active_tab == "ton":
+            rows = [r for r in self._raw_ton
+                    if not q or q in r["item_name"].lower() or q in r["item_code"].lower()]
+            self._load_ton(rows)
+        elif self._active_tab == "muon":
+            rows = [r for r in self._raw_muon
+                    if not q or q in r["item_name"].lower() or q in r["item_code"].lower()
+                    or q in (r["borrower"] or "").lower()]
+            self._load_muon(rows)
+        else:
+            rows = [r for r in self._raw_txl
+                    if not q or q in r["item_name"].lower() or q in r["item_code"].lower()]
+            self._load_txl(rows)
+
+    # ── Table helpers ─────────────────────────────────────────────────────────
+
+    def _setup_cols(self, cols: list[str], specs: list[tuple]):
+        self._table.setColumnCount(len(cols))
+        self._table.setHorizontalHeaderLabels(cols)
+        h = self._table.horizontalHeader()
+        for i, (mode, w) in enumerate(specs):
+            h.setSectionResizeMode(i, mode)
+            if w:
+                self._table.setColumnWidth(i, w)
+
+    def _mk(self, val: str, center=False, clr=None) -> QTableWidgetItem:
+        cell = QTableWidgetItem(val)
+        cell.setFont(QFont(FONT, 12))
+        if center:
+            cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        if clr == "red":
+            cell.setForeground(Qt.GlobalColor.red)
+        return cell
+
+    def _load_ton(self, rows):
+        F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
+        self._setup_cols(self._COLS_TON, [
+            (F, 52), (F, 110), (S, None), (F, 60),
+            (F, 72), (F, 72), (F, 72), (F, 80),
+        ])
+        self._table.setRowCount(0)
+        for i, r in enumerate(rows):
+            ri = self._table.rowCount()
+            self._table.insertRow(ri)
+            self._table.setRowHeight(ri, 48)
+            for c, args in enumerate([
+                (str(i + 1),                              True),
+                (r["item_code"],                          False),
+                (r["item_name"],                          False),
+                (r["unit_of_measure"],                    True),
+                (str(r["h1"]) if r["h1"] else "—",       True),
+                (str(r["h2"]) if r["h2"] else "—",       True),
+                (str(r["h3"]) if r["h3"] else "—",       True),
+                (str(r["total"]),                         True),
+            ]):
+                self._table.setItem(ri, c, self._mk(*args))
+
+    def _load_muon(self, rows):
+        F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
+        self._setup_cols(self._COLS_MUON, [
+            (F, 52), (F, 110), (F, 110), (F, 110), (S, None),
+            (F, 60), (F, 88), (S, None),
+        ])
+        self._table.setRowCount(0)
+        for i, r in enumerate(rows):
+            ri = self._table.rowCount()
+            self._table.insertRow(ri)
+            self._table.setRowHeight(ri, 48)
+            for c, args in enumerate([
+                (str(i + 1),                         True),
+                (r["reference_number"] or "—",       True),
+                (r["transaction_date"],              True),
+                (r["item_code"],                     False),
+                (r["item_name"],                     False),
+                (r["unit_of_measure"],               True),
+                (str(r["quantity"]),                 True),
+                (r["borrower"] or "—",               False),
+            ]):
+                self._table.setItem(ri, c, self._mk(*args))
+
+    def _load_txl(self, rows):
+        F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
+        self._setup_cols(self._COLS_TXL, [
+            (F, 52), (F, 110), (S, None), (F, 60), (F, 80),
+        ])
+        self._table.setRowCount(0)
+        for i, r in enumerate(rows):
+            ri = self._table.rowCount()
+            self._table.insertRow(ri)
+            self._table.setRowHeight(ri, 48)
+            for c, args in enumerate([
+                (str(i + 1),           True),
+                (r["item_code"],       False),
+                (r["item_name"],       False),
+                (r["unit_of_measure"], True),
+                (str(r["total"]),      True, "red"),
+            ]):
+                self._table.setItem(ri, c, self._mk(*args))
 
 
 # ── Per-warehouse tab page ────────────────────────────────────────────────────
