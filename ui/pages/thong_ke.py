@@ -663,6 +663,15 @@ class ThongKeSharedPage(QWidget):
         btn_xuat.setStyleSheet(_btn_style + "QPushButton { background: #2563eb; color: white; }")
         btn_xuat.clicked.connect(self._on_xuat_cho_muon)
         top.addWidget(btn_xuat)
+        top.addSpacing(8)
+
+        btn_h4 = QPushButton("Chuyển Sang H4")
+        btn_h4.setFixedHeight(34)
+        btn_h4.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        btn_h4.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_h4.setStyleSheet(_btn_style + "QPushButton { background: #c0392b; color: white; }")
+        btn_h4.clicked.connect(self._on_chuyen_h4)
+        top.addWidget(btn_h4)
         top.addSpacing(16)
 
         self._search = QLineEdit()
@@ -794,6 +803,12 @@ class ThongKeSharedPage(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
+    def _on_chuyen_h4(self):
+        from ui.dialogs.chuyen_h4_form import ChuyenH4FormDialog
+        dlg = ChuyenH4FormDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
     def _on_xuat_cho_muon(self):
         from ui.dialogs.xuat_kho_form import XuatKhoFormDialog
         dlg = XuatKhoFormDialog(self, subtype="shared_loan")
@@ -874,7 +889,6 @@ class ThongKeSharedPage(QWidget):
         ton  = sum(r["total"]    for r in self._raw_ton)
         muon = sum(r["quantity"] for r in self._raw_muon)
         txl  = sum(r["total"]    for r in self._raw_txl)
-        self._cards["ton"].set_value(str(ton))
         self._cards["muon"].set_value(str(muon))
         self._cards["san_sang"].set_value(str(max(0, ton - muon)))
         self._cards["txl"].set_value(str(txl))
