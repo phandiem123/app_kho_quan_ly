@@ -958,6 +958,7 @@ class ExportImportPage(QWidget):
                 if not row or not row[0]:
                     continue
                 try:
+                    # Format: [name, uom, lifespan_years, price, notes]
                     name  = str(row[0]).strip() if row[0] else ""
                     uom   = str(row[1]).strip() if row[1] else ""
                     life  = int(round(float(row[2]) * 12)) if row[2] else 0
@@ -1030,13 +1031,13 @@ class ExportImportPage(QWidget):
                 if not row or not row[0]:
                     continue
                 try:
-                    code    = str(row[0]).strip()
-                    name    = str(row[1]).strip() if row[1] else ""
-                    wh_type = str(row[2]).strip().upper() if row[2] else ""
-                    address = str(row[3]).strip() if len(row) > 3 and row[3] else ""
-                    notes   = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+                    # Format: [name, type, address, notes]
+                    name    = str(row[0]).strip() if row[0] else ""
+                    wh_type = str(row[1]).strip().upper() if row[1] else ""
+                    address = str(row[2]).strip() if len(row) > 2 and row[2] else ""
+                    notes   = str(row[3]).strip() if len(row) > 3 and row[3] else ""
 
-                    if not code or not name or wh_type not in VALID_TYPES:
+                    if not name or wh_type not in VALID_TYPES:
                         errors.append(
                             f"Dòng {i}: thiếu hoặc sai dữ liệu "
                             f"(Loại phải là TONG hoặc DON_VI)"
@@ -1045,17 +1046,23 @@ class ExportImportPage(QWidget):
                         continue
 
                     existing = conn.execute(
-                        "SELECT id FROM warehouses WHERE code=?", (code,)
+                        "SELECT id FROM warehouses WHERE name=?", (name,)
                     ).fetchone()
 
                     if existing:
                         conn.execute(
-                            "UPDATE warehouses SET name=?, type=?, address=?, notes=?"
-                            " WHERE code=?",
-                            (name, wh_type, address, notes, code),
+                            "UPDATE warehouses SET type=?, address=?, notes=?"
+                            " WHERE name=?",
+                            (wh_type, address, notes, name),
                         )
                         updated += 1
                     else:
+                        n = 1
+                        while True:
+                            code = f"KHO{n:04d}"
+                            if not conn.execute("SELECT 1 FROM warehouses WHERE code=?", (code,)).fetchone():
+                                break
+                            n += 1
                         conn.execute(
                             "INSERT INTO warehouses (code, name, type, address, notes)"
                             " VALUES (?,?,?,?,?)",
@@ -1092,10 +1099,10 @@ class ExportImportPage(QWidget):
             ws.title = "Phiếu Nhập Kho"
             _write_header(ws, [
                 "Số Phiếu *", "Ngày * (yyyy-mm-dd)", "Người Lập", "Ghi Chú",
-                "Mã Kho Nhận *", "Mã Hàng *", "Số Lượng *", "Ghi Chú Dòng",
+                "Tên Kho Nhận *", "Tên Hàng *", "Số Lượng *", "Ghi Chú Dòng",
             ])
-            ws.append(["NK001", "2024-01-15", "Nguyễn Văn A", "", "KHO01", "AK47", 10, ""])
-            ws.append(["NK001", "2024-01-15", "Nguyễn Văn A", "", "KHO01", "B40",  5,  ""])
+            ws.append(["NK001", "2024-01-15", "Nguyễn Văn A", "", "Kho Tổng D6", "Súng AK47", 10, ""])
+            ws.append(["NK001", "2024-01-15", "Nguyễn Văn A", "", "Kho Tổng D6", "Súng B40",  5,  ""])
             _auto_width(ws)
             wb.save(path)
             QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
@@ -1117,10 +1124,10 @@ class ExportImportPage(QWidget):
             ws.title = "Phiếu Xuất Kho"
             _write_header(ws, [
                 "Số Phiếu *", "Ngày * (yyyy-mm-dd)", "Người Lập", "Ghi Chú",
-                "Mã Kho Từ *", "Mã Đơn Vị Nhận", "Mã Hàng *", "Số Lượng *", "Ghi Chú Dòng",
+                "Tên Kho Từ *", "Tên Đơn Vị Nhận", "Tên Hàng *", "Số Lượng *", "Ghi Chú Dòng",
             ])
-            ws.append(["XK001", "2024-01-20", "Trần Thị B", "", "KHO01", "DV01", "AK47", 3, ""])
-            ws.append(["XK001", "2024-01-20", "Trần Thị B", "", "KHO01", "DV01", "B40",  2, ""])
+            ws.append(["XK001", "2024-01-20", "Trần Thị B", "", "Kho Tổng D6", "Đơn Vị 01", "Súng AK47", 3, ""])
+            ws.append(["XK001", "2024-01-20", "Trần Thị B", "", "Kho Tổng D6", "Đơn Vị 01", "Súng B40",  2, ""])
             _auto_width(ws)
             wb.save(path)
             QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
@@ -1143,11 +1150,11 @@ class ExportImportPage(QWidget):
             _write_header(ws, [
                 "Số Phiếu *", "Ngày * (yyyy-mm-dd)", "Loại * (TONG/DON_VI)",
                 "Người Lập", "Ghi Chú",
-                "Mã Kho Từ *", "Mã Kho Đến *",
-                "Mã Hàng *", "Mức HH (DON_VI)", "Số Lượng *", "Ghi Chú Dòng",
+                "Tên Kho Từ *", "Tên Kho Đến *",
+                "Tên Hàng *", "Mức HH (DON_VI)", "Số Lượng *", "Ghi Chú Dòng",
             ])
-            ws.append(["LC001", "2024-02-01", "TONG", "Lê Văn C", "", "KHO01", "KHO02", "AK47", "", 5, ""])
-            ws.append(["LC002", "2024-02-05", "DON_VI", "Lê Văn C", "", "DV01", "DV02", "AK47", "H2", 2, ""])
+            ws.append(["LC001", "2024-02-01", "TONG", "Lê Văn C", "", "Kho Tổng D6", "Kho Tổng D7", "Súng AK47", "", 5, ""])
+            ws.append(["LC002", "2024-02-05", "DON_VI", "Lê Văn C", "", "Đơn Vị 01", "Đơn Vị 02", "Súng AK47", "H2", 2, ""])
             _auto_width(ws)
             wb.save(path)
             QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
@@ -1170,10 +1177,10 @@ class ExportImportPage(QWidget):
             rows = list(ws.iter_rows(min_row=2, values_only=True))
 
             conn = database.get_conn()
-            wh_map = {r["code"]: r["id"] for r in conn.execute(
-                "SELECT code, id FROM warehouses WHERE is_active=1"
+            wh_map = {r["name"]: r["id"] for r in conn.execute(
+                "SELECT name, id FROM warehouses WHERE is_active=1"
             ).fetchall()}
-            item_map = {r["code"]: dict(r) for r in conn.execute(
+            item_map = {r["name"]: dict(r) for r in conn.execute(
                 "SELECT code, id, name, unit_of_measure FROM item_types WHERE is_active=1"
             ).fetchall()}
 
@@ -1187,26 +1194,26 @@ class ExportImportPage(QWidget):
                 ngay      = str(row[1]).strip() if row[1] else ""
                 nguoi_lap = str(row[2]).strip() if row[2] else ""
                 ghi_chu   = str(row[3]).strip() if row[3] else ""
-                ma_kho    = str(row[4]).strip() if row[4] else ""
-                ma_hang   = str(row[5]).strip() if row[5] else ""
+                ten_kho   = str(row[4]).strip() if row[4] else ""
+                ten_hang  = str(row[5]).strip() if row[5] else ""
                 so_luong  = int(row[6]) if row[6] else 0
                 ghi_chu_dong = str(row[7]).strip() if len(row) > 7 and row[7] else ""
 
-                if not so_phieu or not ngay or not ma_kho or not ma_hang or not so_luong:
+                if not so_phieu or not ngay or not ten_kho or not ten_hang or not so_luong:
                     errors.append(f"Dòng {i}: thiếu dữ liệu bắt buộc")
                     continue
-                if ma_kho not in wh_map:
-                    errors.append(f"Dòng {i}: không tìm thấy kho '{ma_kho}'")
+                if ten_kho not in wh_map:
+                    errors.append(f"Dòng {i}: không tìm thấy kho '{ten_kho}'")
                     continue
-                if ma_hang not in item_map:
-                    errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ma_hang}'")
+                if ten_hang not in item_map:
+                    errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
                     continue
 
-                key = (so_phieu, ngay, nguoi_lap, ghi_chu, ma_kho)
+                key = (so_phieu, ngay, nguoi_lap, ghi_chu, ten_kho)
                 if key not in groups:
                     groups[key] = dict(so_phieu=so_phieu, ngay=ngay, nguoi_lap=nguoi_lap,
-                                       ghi_chu=ghi_chu, wh_id=wh_map[ma_kho], lines=[])
-                it = item_map[ma_hang]
+                                       ghi_chu=ghi_chu, wh_id=wh_map[ten_kho], lines=[])
+                it = item_map[ten_hang]
                 groups[key]["lines"].append(ReceiptLine(
                     item_type_id=it["id"], item_code=it["code"],
                     item_name=it["name"], unit_of_measure=it["unit_of_measure"],
@@ -1246,10 +1253,10 @@ class ExportImportPage(QWidget):
             rows = list(ws.iter_rows(min_row=2, values_only=True))
 
             conn = database.get_conn()
-            wh_map = {r["code"]: r["id"] for r in conn.execute(
-                "SELECT code, id FROM warehouses WHERE is_active=1"
+            wh_map = {r["name"]: r["id"] for r in conn.execute(
+                "SELECT name, id FROM warehouses WHERE is_active=1"
             ).fetchall()}
-            item_map = {r["code"]: dict(r) for r in conn.execute(
+            item_map = {r["name"]: dict(r) for r in conn.execute(
                 "SELECT code, id, name, unit_of_measure FROM item_types WHERE is_active=1"
             ).fetchall()}
 
@@ -1259,35 +1266,35 @@ class ExportImportPage(QWidget):
             for i, row in enumerate(rows, start=2):
                 if not row or not row[0]:
                     continue
-                so_phieu  = str(row[0]).strip()
-                ngay      = str(row[1]).strip() if row[1] else ""
-                nguoi_lap = str(row[2]).strip() if row[2] else ""
-                ghi_chu   = str(row[3]).strip() if row[3] else ""
-                ma_kho_tu = str(row[4]).strip() if row[4] else ""
-                ma_kho_den= str(row[5]).strip() if row[5] else ""
-                ma_hang   = str(row[6]).strip() if row[6] else ""
-                so_luong  = int(row[7]) if row[7] else 0
+                so_phieu    = str(row[0]).strip()
+                ngay        = str(row[1]).strip() if row[1] else ""
+                nguoi_lap   = str(row[2]).strip() if row[2] else ""
+                ghi_chu     = str(row[3]).strip() if row[3] else ""
+                ten_kho_tu  = str(row[4]).strip() if row[4] else ""
+                ten_kho_den = str(row[5]).strip() if row[5] else ""
+                ten_hang    = str(row[6]).strip() if row[6] else ""
+                so_luong    = int(row[7]) if row[7] else 0
                 ghi_chu_dong = str(row[8]).strip() if len(row) > 8 and row[8] else ""
 
-                if not so_phieu or not ngay or not ma_kho_tu or not ma_hang or not so_luong:
+                if not so_phieu or not ngay or not ten_kho_tu or not ten_hang or not so_luong:
                     errors.append(f"Dòng {i}: thiếu dữ liệu bắt buộc")
                     continue
-                if ma_kho_tu not in wh_map:
-                    errors.append(f"Dòng {i}: không tìm thấy kho '{ma_kho_tu}'")
+                if ten_kho_tu not in wh_map:
+                    errors.append(f"Dòng {i}: không tìm thấy kho '{ten_kho_tu}'")
                     continue
-                if ma_hang not in item_map:
-                    errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ma_hang}'")
+                if ten_hang not in item_map:
+                    errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
                     continue
-                to_id = wh_map.get(ma_kho_den) if ma_kho_den else None
+                to_id = wh_map.get(ten_kho_den) if ten_kho_den else None
 
-                key = (so_phieu, ngay, nguoi_lap, ghi_chu, ma_kho_tu, ma_kho_den)
+                key = (so_phieu, ngay, nguoi_lap, ghi_chu, ten_kho_tu, ten_kho_den)
                 if key not in groups:
                     groups[key] = dict(
                         so_phieu=so_phieu, ngay=ngay, nguoi_lap=nguoi_lap,
-                        ghi_chu=ghi_chu, from_id=wh_map[ma_kho_tu], to_id=to_id,
+                        ghi_chu=ghi_chu, from_id=wh_map[ten_kho_tu], to_id=to_id,
                         lines=[],
                     )
-                it = item_map[ma_hang]
+                it = item_map[ten_hang]
                 groups[key]["lines"].append(IssueLine(
                     item_type_id=it["id"], item_code=it["code"],
                     item_name=it["name"], unit_of_measure=it["unit_of_measure"],
@@ -1328,10 +1335,10 @@ class ExportImportPage(QWidget):
             rows = list(ws.iter_rows(min_row=2, values_only=True))
 
             conn = database.get_conn()
-            wh_map = {r["code"]: r["id"] for r in conn.execute(
-                "SELECT code, id FROM warehouses WHERE is_active=1"
+            wh_map = {r["name"]: r["id"] for r in conn.execute(
+                "SELECT name, id FROM warehouses WHERE is_active=1"
             ).fetchall()}
-            item_map = {r["code"]: dict(r) for r in conn.execute(
+            item_map = {r["name"]: dict(r) for r in conn.execute(
                 "SELECT code, id, name, unit_of_measure FROM item_types WHERE is_active=1"
             ).fetchall()}
 
@@ -1347,39 +1354,39 @@ class ExportImportPage(QWidget):
                 loai      = str(row[2]).strip().upper() if row[2] else ""
                 nguoi_lap = str(row[3]).strip() if row[3] else ""
                 ghi_chu   = str(row[4]).strip() if row[4] else ""
-                ma_tu     = str(row[5]).strip() if row[5] else ""
-                ma_den    = str(row[6]).strip() if row[6] else ""
-                ma_hang   = str(row[7]).strip() if row[7] else ""
+                ten_tu    = str(row[5]).strip() if row[5] else ""
+                ten_den   = str(row[6]).strip() if row[6] else ""
+                ten_hang  = str(row[7]).strip() if row[7] else ""
                 muc_hh    = str(row[8]).strip().upper() if row[8] else "H1"
                 so_luong  = int(row[9]) if row[9] else 0
                 ghi_chu_dong = str(row[10]).strip() if len(row) > 10 and row[10] else ""
 
                 if not so_phieu or not ngay or loai not in VALID_TYPES \
-                        or not ma_tu or not ma_den or not ma_hang or not so_luong:
+                        or not ten_tu or not ten_den or not ten_hang or not so_luong:
                     errors.append(f"Dòng {i}: thiếu hoặc sai dữ liệu bắt buộc")
                     continue
-                if ma_tu not in wh_map:
-                    errors.append(f"Dòng {i}: không tìm thấy kho '{ma_tu}'")
+                if ten_tu not in wh_map:
+                    errors.append(f"Dòng {i}: không tìm thấy kho '{ten_tu}'")
                     continue
-                if ma_den not in wh_map:
-                    errors.append(f"Dòng {i}: không tìm thấy kho '{ma_den}'")
+                if ten_den not in wh_map:
+                    errors.append(f"Dòng {i}: không tìm thấy kho '{ten_den}'")
                     continue
-                if ma_hang not in item_map:
-                    errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ma_hang}'")
+                if ten_hang not in item_map:
+                    errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
                     continue
                 if muc_hh not in ("H1", "H2", "H3", "H4"):
                     muc_hh = "H1"
 
                 tx_type = "LUAN_CHUYEN_KHO" if loai == "TONG" else "LUAN_CHUYEN_DV"
-                key = (so_phieu, ngay, tx_type, nguoi_lap, ghi_chu, ma_tu, ma_den)
+                key = (so_phieu, ngay, tx_type, nguoi_lap, ghi_chu, ten_tu, ten_den)
                 if key not in groups:
                     groups[key] = dict(
                         so_phieu=so_phieu, ngay=ngay, tx_type=tx_type,
                         nguoi_lap=nguoi_lap, ghi_chu=ghi_chu,
-                        from_id=wh_map[ma_tu], to_id=wh_map[ma_den],
+                        from_id=wh_map[ten_tu], to_id=wh_map[ten_den],
                         lines=[],
                     )
-                it = item_map[ma_hang]
+                it = item_map[ten_hang]
                 groups[key]["lines"].append(TransferLine(
                     item_type_id=it["id"], item_code=it["code"],
                     item_name=it["name"], unit_of_measure=it["unit_of_measure"],
@@ -1443,11 +1450,11 @@ class ExportImportPage(QWidget):
             ws = wb.active
             ws.title = "Kho"
             _write_header(ws, [
-                "Mã Kho *", "Tên Kho *", "Loại (TONG/DON_VI) *",
+                "Tên Kho *", "Loại (TONG/DON_VI) *",
                 "Địa Chỉ", "Ghi Chú",
             ])
-            ws.append(["D6", "Kho Tổng D6", "TONG", "123 Đường ABC", ""])
-            ws.append(["DV01", "Đơn Vị 01", "DON_VI", "456 Đường XYZ", ""])
+            ws.append(["Kho Tổng D6", "TONG", "123 Đường ABC", ""])
+            ws.append(["Đơn Vị 01", "DON_VI", "456 Đường XYZ", ""])
             _auto_width(ws)
             wb.save(path)
             QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
