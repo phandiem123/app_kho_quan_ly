@@ -622,6 +622,7 @@ class ThongKeSharedPage(QWidget):
     _COLS_TXL  = ["STT", "Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"]
 
     _TABS = [
+        ("ton",  "Tồn Kho"),
         ("muon", "Đang Cho Mượn"),
         ("txl",  "Chờ TXL (H4)"),
     ]
@@ -629,7 +630,7 @@ class ThongKeSharedPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setStyleSheet("ThongKeSharedPage { background: #fafafa; }")
-        self._active_tab   = "muon"
+        self._active_tab   = "ton"
         self._active_wh_id: int | None = None
         self._raw_ton:  list = []
         self._raw_muon: list = []
@@ -706,7 +707,6 @@ class ThongKeSharedPage(QWidget):
         card_h.setSpacing(14)
         self._cards: dict[str, _SummaryCard] = {}
         for key, label in [
-            ("ton",      "Tồn Kho (H1–H3)"),
             ("muon",     "Đang Cho Mượn"),
             ("san_sang", "Sẵn Sàng"),
             ("txl",      "Chờ TXL (H4)"),
@@ -787,6 +787,12 @@ class ThongKeSharedPage(QWidget):
     def _on_wh_changed(self, _):
         self._active_wh_id = self._wh_combo.currentData()
         self._reload_data()
+
+    def _on_nhap_moi(self):
+        from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
+        dlg = NhapKhoFormDialog(self, subtype="shared_new")
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
 
     def _on_xuat_cho_muon(self):
         from ui.dialogs.xuat_kho_form import XuatKhoFormDialog
