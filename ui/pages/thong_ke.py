@@ -656,6 +656,15 @@ class ThongKeSharedPage(QWidget):
                 font-size: 12px; font-weight: 600; }
             QPushButton:hover { opacity: 0.85; }
         """
+        btn_nhan_sk = QPushButton("Nhận Từ Sự Kiện")
+        btn_nhan_sk.setFixedHeight(34)
+        btn_nhan_sk.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        btn_nhan_sk.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_nhan_sk.setStyleSheet(_btn_style + "QPushButton { background: #16a34a; color: white; }")
+        btn_nhan_sk.clicked.connect(self._on_nhan_tu_su_kien)
+        top.addWidget(btn_nhan_sk)
+        top.addSpacing(8)
+
         btn_xuat = QPushButton("+ Xuất Cho Mượn")
         btn_xuat.setFixedHeight(34)
         btn_xuat.setFont(QFont(FONT, 12, QFont.Weight.Bold))
@@ -800,6 +809,12 @@ class ThongKeSharedPage(QWidget):
     def _on_nhap_moi(self):
         from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
         dlg = NhapKhoFormDialog(self, subtype="shared_new")
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _on_nhan_tu_su_kien(self):
+        from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
+        dlg = NhapKhoFormDialog(self, subtype="event_return")
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
