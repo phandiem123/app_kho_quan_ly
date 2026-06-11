@@ -106,6 +106,8 @@ def _register_lazy_pages():
     MainWindow._LAZY["export_import"] = ExportImportPage
     MainWindow._LAZY["txl_kho"] = TxlKhoPage
     MainWindow._LAZY["txl_don_vi"] = TxlDonViPage
+    from ui.pages.bieu_do import BieuDoPage
+    MainWindow._LAZY["bieu_do"] = BieuDoPage
 
 
 _register_lazy_pages()

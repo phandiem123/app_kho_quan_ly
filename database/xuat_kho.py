@@ -114,21 +114,21 @@ def get_lines(transaction_id: int) -> list[IssueLine]:
     ]
 
 
-def _dec_inv_tong(conn, wh_id, item_type_id, qty):
+def _dec_inv_tong(conn, wh_id, item_type_id, qty, quality_level: str = "H1"):
     conn.execute("""
         UPDATE inventory SET quantity = MAX(0, quantity - ?)
-        WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
+        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
           AND received_at_unit_date IS NULL AND is_shared=0
-    """, (qty, wh_id, item_type_id))
+    """, (qty, wh_id, item_type_id, quality_level))
 
 
-def _add_inv_at_unit(conn, wh_id, item_type_id, qty, date):
+def _add_inv_at_unit(conn, wh_id, item_type_id, qty, date, quality_level: str = "H1"):
     row = conn.execute("""
         SELECT id FROM inventory
-        WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
+        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
           AND received_at_unit_date=? AND is_shared=0
         LIMIT 1
-    """, (wh_id, item_type_id, date)).fetchone()
+    """, (wh_id, item_type_id, quality_level, date)).fetchone()
     if row:
         conn.execute("UPDATE inventory SET quantity=quantity+? WHERE id=?",
                      (qty, row["id"]))
@@ -136,8 +136,8 @@ def _add_inv_at_unit(conn, wh_id, item_type_id, qty, date):
         conn.execute("""
             INSERT INTO inventory
                 (warehouse_id, item_type_id, quality_level, quantity, received_at_unit_date)
-            VALUES (?, ?, 'H1', ?, ?)
-        """, (wh_id, item_type_id, qty, date))
+            VALUES (?, ?, ?, ?, ?)
+        """, (wh_id, item_type_id, quality_level, qty, date))
 
 
 def insert(issue: Issue) -> int:
@@ -154,18 +154,19 @@ def insert(issue: Issue) -> int:
     tx_id = cur.lastrowid
 
     for line in issue.lines:
+        ql = line.quality_level or "H1"
         conn.execute("""
             INSERT INTO transaction_lines
                 (transaction_id, item_type_id, quality_level_from,
                  quality_level_to, quantity, unit_price, notes)
-            VALUES (?, ?, 'H1', 'H1', ?, ?, ?)
-        """, (tx_id, line.item_type_id, line.quantity, line.unit_price, line.notes))
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (tx_id, line.item_type_id, ql, ql, line.quantity, line.unit_price, line.notes))
 
         if issue.subtype == "to_unit":
-            _dec_inv_tong(conn, issue.from_warehouse_id, line.item_type_id, line.quantity)
+            _dec_inv_tong(conn, issue.from_warehouse_id, line.item_type_id, line.quantity, ql)
             if issue.to_warehouse_id:
                 _add_inv_at_unit(conn, issue.to_warehouse_id, line.item_type_id,
-                                 line.quantity, issue.transaction_date)
+                                 line.quantity, issue.transaction_date, ql)
         elif issue.subtype == "shared_loan":
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
@@ -186,18 +187,19 @@ def update(issue: Issue) -> None:
     if old:
         old_subtype = "shared_loan" if old["type"] == "MUON" else "to_unit"
         for line in get_lines(issue.id):
+            ql = line.quality_level or "H1"
             if old_subtype == "to_unit":
                 if old["from_warehouse_id"]:
                     conn.execute("""
                         UPDATE inventory SET quantity = quantity + ?
-                        WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
+                        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
                           AND received_at_unit_date IS NULL AND is_shared=0
-                    """, (line.quantity, old["from_warehouse_id"], line.item_type_id))
+                    """, (line.quantity, old["from_warehouse_id"], line.item_type_id, ql))
                 if old["to_warehouse_id"]:
                     conn.execute("""
                         UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                        WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
-                    """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
+                        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
+                    """, (line.quantity, old["to_warehouse_id"], line.item_type_id, ql))
             elif old_subtype == "shared_loan" and old["from_warehouse_id"]:
                 conn.execute("""
                     UPDATE inventory SET quantity = quantity + ?
@@ -217,18 +219,19 @@ def update(issue: Issue) -> None:
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (issue.id,))
 
     for line in issue.lines:
+        ql = line.quality_level or "H1"
         conn.execute("""
             INSERT INTO transaction_lines
                 (transaction_id, item_type_id, quality_level_from,
                  quality_level_to, quantity, unit_price, notes)
-            VALUES (?, ?, 'H1', 'H1', ?, ?, ?)
-        """, (issue.id, line.item_type_id, line.quantity, line.unit_price, line.notes))
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (issue.id, line.item_type_id, ql, ql, line.quantity, line.unit_price, line.notes))
 
         if issue.subtype == "to_unit":
-            _dec_inv_tong(conn, issue.from_warehouse_id, line.item_type_id, line.quantity)
+            _dec_inv_tong(conn, issue.from_warehouse_id, line.item_type_id, line.quantity, ql)
             if issue.to_warehouse_id:
                 _add_inv_at_unit(conn, issue.to_warehouse_id, line.item_type_id,
-                                 line.quantity, issue.transaction_date)
+                                 line.quantity, issue.transaction_date, ql)
         elif issue.subtype == "shared_loan":
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
@@ -248,18 +251,19 @@ def delete(issue_id: int) -> None:
     if old:
         subtype = "shared_loan" if old["type"] == "MUON" else "to_unit"
         for line in get_lines(issue_id):
+            ql = line.quality_level or "H1"
             if subtype == "to_unit":
                 if old["from_warehouse_id"]:
                     conn.execute("""
                         UPDATE inventory SET quantity = quantity + ?
-                        WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
+                        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
                           AND received_at_unit_date IS NULL AND is_shared=0
-                    """, (line.quantity, old["from_warehouse_id"], line.item_type_id))
+                    """, (line.quantity, old["from_warehouse_id"], line.item_type_id, ql))
                 if old["to_warehouse_id"]:
                     conn.execute("""
                         UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                        WHERE warehouse_id=? AND item_type_id=? AND quality_level='H1'
-                    """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
+                        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
+                    """, (line.quantity, old["to_warehouse_id"], line.item_type_id, ql))
             elif subtype == "shared_loan" and old["from_warehouse_id"]:
                 conn.execute("""
                     UPDATE inventory SET quantity = quantity + ?

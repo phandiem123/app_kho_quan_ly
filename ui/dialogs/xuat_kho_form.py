@@ -71,6 +71,14 @@ class IssueLineRow(QWidget):
         self.spin_qty.setFixedHeight(34)
         self.spin_qty.setStyleSheet(_SPIN)
 
+        self.combo_ql = QComboBox()
+        self.combo_ql.setFixedWidth(72)
+        self.combo_ql.setFixedHeight(34)
+        self.combo_ql.setStyleSheet(_FIELD)
+        for ql in ["H1", "H2", "H3", "H4"]:
+            self.combo_ql.addItem(ql)
+        self.combo_ql.setVisible(show_price)
+
         self.spin_price = QDoubleSpinBox()
         self.spin_price.setRange(0, 999_999_999_999)
         self.spin_price.setDecimals(0)
@@ -108,6 +116,7 @@ class IssueLineRow(QWidget):
         h.addWidget(self.lbl_unit)
         h.addWidget(self.spin_qty)
         if show_price:
+            h.addWidget(self.combo_ql)
             h.addWidget(self.spin_price)
             h.addWidget(self.lbl_total)
         h.addWidget(self.edit_notes, 1)
@@ -143,6 +152,7 @@ class IssueLineRow(QWidget):
             unit_of_measure=it.unit_of_measure,
             quantity=self.spin_qty.value(),
             unit_price=self.spin_price.value(),
+            quality_level=self.combo_ql.currentText() if self._show_price else "H1",
             notes=self.edit_notes.text().strip(),
         )
 
@@ -154,6 +164,9 @@ class IssueLineRow(QWidget):
                 break
         self.spin_qty.setValue(line.quantity)
         self.spin_price.setValue(line.unit_price)
+        idx = self.combo_ql.findText(line.quality_level or "H1")
+        if idx >= 0:
+            self.combo_ql.setCurrentIndex(idx)
         self.edit_notes.setText(line.notes)
 
 
@@ -288,7 +301,7 @@ class XuatKhoFormDialog(QDialog):
         ch.setSpacing(6)
         col_defs = [("Mặt Hàng", 2, None), ("ĐVT", 0, 56), ("Số lượng", 0, 80)]
         if show_price:
-            col_defs += [("Đơn Giá", 0, 120), ("Thành Tiền", 0, 120)]
+            col_defs += [("CL", 0, 72), ("Đơn Giá", 0, 120), ("Thành Tiền", 0, 120)]
         col_defs += [("Ghi chú", 1, None), ("", 0, 32)]
         for txt, stretch, w in col_defs:
             l = QLabel(txt)

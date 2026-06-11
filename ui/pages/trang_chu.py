@@ -1,3 +1,4 @@
+import database
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
@@ -8,7 +9,7 @@ from PyQt6.QtGui import QFont, QCursor, QAction
 from ui.dialogs.warehouse_form import WarehouseFormDialog
 from ui.dialogs.item_type_form import ItemTypeFormDialog
 from ui.topbar import TopBar
-from database.warehouses import Warehouse, get_all as wh_get_all, get_stats, soft_delete as wh_soft_delete
+from database.warehouses import Warehouse, get_all as wh_get_all, soft_delete as wh_soft_delete
 from database.item_types import ItemType, get_all as item_get_all, soft_delete as item_soft_delete
 
 FONT = "Segoe UI"
@@ -33,32 +34,69 @@ _TABLE_STYLE = """
 class StatCard(QWidget):
     def __init__(self, icon: str, title: str, value: str, color: str = "#111"):
         super().__init__()
-        self.setStyleSheet("""
-            StatCard {
-                background: white;
-                border: 1px solid #efefef;
-                border-radius: 12px;
-            }
-        """)
-        self.setMinimumHeight(120)
+        self.setStyleSheet(
+            "StatCard { background: white; border: 1px solid #efefef; border-radius: 12px; }"
+        )
+        self.setFixedHeight(82)
         v = QVBoxLayout(self)
-        v.setContentsMargins(20, 18, 20, 18)
-        v.setSpacing(8)
-        row = QHBoxLayout()
+        v.setContentsMargins(18, 14, 18, 14)
+        v.setSpacing(4)
+
+        # Icon + number on same row
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        top.setContentsMargins(0, 0, 0, 0)
         ico = QLabel(icon)
-        ico.setFont(QFont(FONT, 20))
+        ico.setFont(QFont(FONT, 15))
         ico.setStyleSheet("border: none;")
-        row.addWidget(ico)
-        row.addStretch()
-        v.addLayout(row)
+        top.addWidget(ico)
         val_lbl = QLabel(str(value))
-        val_lbl.setFont(QFont(FONT, 28, QFont.Weight.Bold))
+        val_lbl.setFont(QFont(FONT, 22, QFont.Weight.Bold))
         val_lbl.setStyleSheet(f"color: {color}; border: none;")
-        v.addWidget(val_lbl)
+        top.addWidget(val_lbl)
+        top.addStretch()
+        v.addLayout(top)
+
         ttl_lbl = QLabel(title)
-        ttl_lbl.setFont(QFont(FONT, 11))
-        ttl_lbl.setStyleSheet("color: #111; border: none;")
+        ttl_lbl.setFont(QFont(FONT, 10))
+        ttl_lbl.setStyleSheet("color: #888; border: none;")
         v.addWidget(ttl_lbl)
+
+
+# ── Compact read-only table ────────────────────────────────────────────────────
+class _CompactTable(QTableWidget):
+    def __init__(self, cols: list[str]):
+        super().__init__(0, len(cols))
+        self.setHorizontalHeaderLabels(cols)
+        self.verticalHeader().setVisible(False)
+        self.setShowGrid(False)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setStyleSheet(_TABLE_STYLE)
+        self.setMaximumHeight(210)
+
+    def _cell(self, text: str, align=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+              color: str | None = None) -> QTableWidgetItem:
+        item = QTableWidgetItem(text)
+        item.setFont(QFont(FONT, 12))
+        item.setTextAlignment(align)
+        if color:
+            from PyQt6.QtGui import QColor
+            item.setForeground(QColor(color))
+        return item
+
+    def load_empty(self, message: str = "Không có dữ liệu"):
+        self.setRowCount(1)
+        self.setRowHeight(0, 44)
+        empty = QTableWidgetItem(message)
+        empty.setFont(QFont(FONT, 12))
+        empty.setForeground(Qt.GlobalColor.gray)
+        empty.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setItem(0, 0, empty)
+        self.setSpan(0, 0, 1, self.columnCount())
 
 
 # ── Generic "···" action button ───────────────────────────────────────────────
@@ -99,13 +137,10 @@ class DotsButton(QPushButton):
             QMenu::item:selected { background: #f5f5f5; }
             QMenu::separator { height: 1px; background: #efefef; margin: 2px 8px; }
         """)
-        # act_view = QAction("Xem Chi Tiết", self)
-        # act_view.triggered.connect(lambda: self._on_view(self._data))
         act_edit = QAction("Sửa", self)
         act_edit.triggered.connect(lambda: self._on_edit(self._data))
         act_del = QAction("Xóa", self)
         act_del.triggered.connect(lambda: self._on_delete(self._data))
-        # menu.addAction(act_view)
         menu.addAction(act_edit)
         menu.addSeparator()
         menu.addAction(act_del)
@@ -217,14 +252,37 @@ class HangHoaTable(QTableWidget):
                 self.setCellWidget(r, 7, btn)
 
 
+# ── Helper: info section frame ─────────────────────────────────────────────────
+def _info_frame(title: str, count_lbl: QLabel, table: _CompactTable) -> QFrame:
+    frame = QFrame()
+    frame.setStyleSheet("""
+        QFrame { background: white; border: 1px solid #efefef; border-radius: 12px; }
+    """)
+    v = QVBoxLayout(frame)
+    v.setContentsMargins(18, 14, 18, 14)
+    v.setSpacing(10)
+    hdr = QHBoxLayout()
+    lbl = QLabel(title)
+    lbl.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+    lbl.setStyleSheet("color: #111; border: none;")
+    hdr.addWidget(lbl)
+    hdr.addStretch()
+    count_lbl.setFont(QFont(FONT, 11))
+    count_lbl.setStyleSheet("color: #888; border: none;")
+    hdr.addWidget(count_lbl)
+    v.addLayout(hdr)
+    v.addWidget(table)
+    return frame
+
+
 # ── Trang Chủ ─────────────────────────────────────────────────────────────────
 class TrangChuPage(QWidget):
-    TABS = ["Kho", "Đơn Vị", "Hàng Hoá"]
+    TABS = ["Thống Kê Nhanh", "Kho", "Đơn Vị", "Hàng Hoá"]
 
     def __init__(self):
         super().__init__()
         self.setStyleSheet("TrangChuPage { background: #fafafa; }")
-        self._active_type = "TONG"   # "TONG" | "DON_VI" | "HANG_HOA"
+        self._active_type = "STATS"
         self._cache: list = []
 
         root = QVBoxLayout(self)
@@ -239,42 +297,77 @@ class TrangChuPage(QWidget):
 
         sub = QLabel("Tổng quan hệ thống quản lý kho hàng DCCD")
         sub.setFont(QFont(FONT, 12))
-        sub.setStyleSheet("color: #111; margin-top: 4px;")
+        sub.setStyleSheet("color: #888; margin-top: 4px;")
         root.addWidget(sub)
 
-        root.addSpacing(28)
+        root.addSpacing(24)
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("color: #eee;")
         root.addWidget(sep)
-        root.addSpacing(28)
+        root.addSpacing(20)
 
-        # ── Stat cards ────────────────────────────────────────────────────────
-        sec = QLabel("Thống kê nhanh")
-        sec.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-        sec.setStyleSheet("color: #111;")
-        root.addWidget(sec)
-        root.addSpacing(14)
-
-        self._cards_row = QHBoxLayout()
-        self._cards_row.setSpacing(16)
-        root.addLayout(self._cards_row)
-
-        root.addSpacing(32)
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet("color: #eee;")
-        root.addWidget(sep2)
-        root.addSpacing(22)
-
-        # ── TopBar (tabs + search) ────────────────────────────────────────────
+        # ── TopBar ────────────────────────────────────────────────────────────
         self.topbar = TopBar(self.TABS, active_tab=0)
         self.topbar.tab_bar.tab_changed.connect(self._on_tab)
         self.topbar.search.textChanged.connect(self._on_search)
+        self.topbar.search.setVisible(False)   # hidden on stats tab
         root.addWidget(self.topbar)
-        root.addSpacing(22)
+        root.addSpacing(20)
 
-        # ── Section title + add button ────────────────────────────────────────
+        # ── Stats panel (tab 0) ───────────────────────────────────────────────
+        self._stats_panel = QWidget()
+        self._stats_panel.setStyleSheet("background: transparent;")
+        sv = QVBoxLayout(self._stats_panel)
+        sv.setContentsMargins(0, 0, 0, 0)
+        sv.setSpacing(0)
+
+        self._alert_row = QHBoxLayout()
+        self._alert_row.setSpacing(12)
+        sv.addLayout(self._alert_row)
+        sv.addSpacing(16)
+
+        lists_row = QHBoxLayout()
+        lists_row.setSpacing(20)
+
+        self._lbl_borrow_count = QLabel()
+        self._borrow_table = _CompactTable(["Mã ĐV", "Tên Đơn Vị", "SL Đang Mượn"])
+        bh = self._borrow_table.horizontalHeader()
+        bh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        bh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        bh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self._borrow_table.setColumnWidth(0, 80)
+        self._borrow_table.setColumnWidth(2, 110)
+        lists_row.addWidget(
+            _info_frame("Đơn Vị Chưa Trả Hàng Dùng Chung",
+                        self._lbl_borrow_count, self._borrow_table), 1
+        )
+
+        self._lbl_h4_count = QLabel()
+        self._h4_table = _CompactTable(["Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"])
+        hh = self._h4_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self._h4_table.setColumnWidth(0, 100)
+        self._h4_table.setColumnWidth(2, 64)
+        self._h4_table.setColumnWidth(3, 90)
+        lists_row.addWidget(
+            _info_frame("Hàng H4 Tại Kho",
+                        self._lbl_h4_count, self._h4_table), 1
+        )
+
+        sv.addLayout(lists_row)
+        root.addWidget(self._stats_panel)
+
+        # ── CRUD panel (tabs 1-3) ─────────────────────────────────────────────
+        self._crud_panel = QWidget()
+        self._crud_panel.setStyleSheet("background: transparent;")
+        cv = QVBoxLayout(self._crud_panel)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
+
         title_row = QHBoxLayout()
         self._section_title = QLabel("Danh Sách Kho")
         self._section_title.setFont(QFont(FONT, 15))
@@ -295,39 +388,134 @@ class TrangChuPage(QWidget):
         """)
         self._btn_add.clicked.connect(self._on_add)
         title_row.addWidget(self._btn_add)
-        root.addLayout(title_row)
-        root.addSpacing(12)
+        cv.addLayout(title_row)
+        cv.addSpacing(12)
 
-        # ── Tables (toggle visibility by tab) ────────────────────────────────
         self.table = KhoTable()
-        root.addWidget(self.table)
+        cv.addWidget(self.table)
 
         self.item_table = HangHoaTable()
         self.item_table.setVisible(False)
-        root.addWidget(self.item_table)
+        cv.addWidget(self.item_table)
+
+        self._crud_panel.setVisible(False)
+        root.addWidget(self._crud_panel)
 
         self.refresh()
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
     def refresh(self):
-        # Stat cards
-        while self._cards_row.count():
-            item = self._cards_row.takeAt(0)
+        conn = database.get_conn()
+
+        # ── Alert cards ────────────────────────────────────────────────
+        while self._alert_row.count():
+            item = self._alert_row.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        stats = get_stats()
-        for icon, title, value, color in [
-            ("🏠", "Kho Tổng",               stats["kho_tong"],   "#111"),
-            ("📦", "Đơn Vị",                  stats["don_vi"],     "#111"),
-            ("🔖", "Loại mặt hàng đang lưu", stats["item_types"], "#111"),
-            ("⚠️", "H4 chờ thanh xử lý",     stats["h4_pending"], "#d32f2f"),
-        ]:
-            self._cards_row.addWidget(StatCard(icon, title, value, color))
 
-        self._reload_cache()
+        dc_qty = conn.execute("""
+            SELECT COALESCE(SUM(tl.quantity), 0) AS qty
+            FROM shared_borrows sb
+            JOIN transaction_lines tl ON tl.transaction_id = sb.transaction_id
+            WHERE sb.status = 'DANG_MUON'
+        """).fetchone()["qty"] or 0
+
+        h4_returned = conn.execute("""
+            SELECT COALESCE(SUM(tl.quantity), 0) AS qty
+            FROM transactions tx
+            JOIN transaction_lines tl ON tl.transaction_id = tx.id
+            WHERE tx.type = 'NHAP_KHO'
+              AND tx.from_warehouse_id IS NOT NULL
+              AND tl.quality_level_to = 'H4'
+              AND tx.transaction_date >= date('now', '-30 days')
+        """).fetchone()["qty"] or 0
+
+        txl_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM transactions WHERE type = 'THANH_XU_LY'"
+        ).fetchone()["cnt"] or 0
+
+        for icon, title, value, color in [
+            ("🔄", "Hàng DC Đang Cho Mượn",    dc_qty,      "#e65100" if dc_qty > 0 else "#111"),
+            ("↩",  "H4 Từ ĐV Trả Về (30 Ngày)", h4_returned, "#111"),
+            ("📋", "Phiếu TXL",                  txl_count,   "#d32f2f" if txl_count > 0 else "#111"),
+        ]:
+            self._alert_row.addWidget(StatCard(icon, title, value, color))
+        self._alert_row.addStretch()
+
+        # ── Bảng: Đơn Vị Chưa Trả Hàng DC ───────────────────────────────────
+        borrow_rows = conn.execute("""
+            SELECT w.code, w.name,
+                   COALESCE(SUM(tl.quantity), 0) AS total_qty
+            FROM shared_borrows sb
+            JOIN warehouses w ON w.id = sb.borrowing_warehouse_id
+            JOIN transaction_lines tl ON tl.transaction_id = sb.transaction_id
+            WHERE sb.status = 'DANG_MUON'
+            GROUP BY w.id
+            ORDER BY w.name
+        """).fetchall()
+
+        self._borrow_table.clearSpans()
+        self._borrow_table.setRowCount(0)
+        if borrow_rows:
+            self._lbl_borrow_count.setText(f"{len(borrow_rows)} đơn vị")
+            for r in borrow_rows:
+                row = self._borrow_table.rowCount()
+                self._borrow_table.insertRow(row)
+                self._borrow_table.setRowHeight(row, 44)
+                for col, val in enumerate([r["code"], r["name"], str(r["total_qty"])]):
+                    align = (Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+                             if col != 1 else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    item = QTableWidgetItem(val)
+                    item.setFont(QFont(FONT, 12))
+                    item.setTextAlignment(align)
+                    self._borrow_table.setItem(row, col, item)
+        else:
+            self._lbl_borrow_count.setText("Tất cả đã trả ✓")
+            self._borrow_table.load_empty("Không có đơn vị nào đang mượn")
+
+        # ── Bảng: H4 Tại Kho ─────────────────────────────────────────────────
+        h4_rows = conn.execute("""
+            SELECT t.code, t.name, t.unit_of_measure,
+                   SUM(i.quantity) AS qty
+            FROM inventory i
+            JOIN warehouses w ON w.id = i.warehouse_id
+            JOIN item_types t  ON t.id = i.item_type_id
+            WHERE w.type = 'TONG' AND i.quality_level = 'H4'
+              AND i.is_shared = 0 AND i.quantity > 0
+            GROUP BY t.id
+            ORDER BY t.name
+        """).fetchall()
+
+        self._h4_table.clearSpans()
+        self._h4_table.setRowCount(0)
+        if h4_rows:
+            total_h4 = sum(r["qty"] for r in h4_rows)
+            self._lbl_h4_count.setText(f"{total_h4} chiếc")
+            self._lbl_h4_count.setStyleSheet("color: #d32f2f; border: none;")
+            for r in h4_rows:
+                row = self._h4_table.rowCount()
+                self._h4_table.insertRow(row)
+                self._h4_table.setRowHeight(row, 44)
+                for col, val in enumerate([r["code"], r["name"],
+                                           r["unit_of_measure"], str(r["qty"])]):
+                    align = (Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+                             if col in (0, 2, 3) else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    item = QTableWidgetItem(val)
+                    item.setFont(QFont(FONT, 12))
+                    item.setTextAlignment(align)
+                    self._h4_table.setItem(row, col, item)
+        else:
+            self._lbl_h4_count.setText("Không có")
+            self._lbl_h4_count.setStyleSheet("color: #888; border: none;")
+            self._h4_table.load_empty("Không có hàng H4 tại kho")
+
+        if self._active_type != "STATS":
+            self._reload_cache()
 
     def _reload_cache(self):
+        if self._active_type == "STATS":
+            return
         if self._active_type in ("TONG", "DON_VI"):
             self._cache = wh_get_all(wh_type=self._active_type)
         else:
@@ -335,6 +523,8 @@ class TrangChuPage(QWidget):
         self._apply_filter()
 
     def _apply_filter(self):
+        if self._active_type == "STATS":
+            return
         query = self.topbar.search.text().strip().lower()
         if self._active_type in ("TONG", "DON_VI"):
             data = [w for w in self._cache
@@ -363,19 +553,28 @@ class TrangChuPage(QWidget):
 
     def _on_tab(self, idx: int):
         self.topbar.search.clear()
+        is_stats = (idx == 0)
+        self._stats_panel.setVisible(is_stats)
+        self._crud_panel.setVisible(not is_stats)
+        self.topbar.search.setVisible(not is_stats)
+
         if idx == 0:
+            self._active_type = "STATS"
+        elif idx == 1:
             self._active_type = "TONG"
             self._section_title.setText("Danh Sách Kho")
             self._btn_add.setText("+ Thêm Kho")
-        elif idx == 1:
+            self._reload_cache()
+        elif idx == 2:
             self._active_type = "DON_VI"
             self._section_title.setText("Danh Sách Đơn Vị")
             self._btn_add.setText("+ Thêm Đơn Vị")
+            self._reload_cache()
         else:
             self._active_type = "HANG_HOA"
             self._section_title.setText("Danh Sách Hàng Hoá")
             self._btn_add.setText("+ Thêm Hàng Hoá")
-        self._reload_cache()
+            self._reload_cache()
 
     # ── Add dispatcher ────────────────────────────────────────────────────────
 
