@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QCursor, QAction
+import database
 from database.xuat_kho import Issue, IssueLine, get_all, get_lines, delete as issue_delete
 
 FONT = "Segoe UI"
@@ -59,6 +60,27 @@ class DetailPanel(QWidget):
         root.setSpacing(10)
 
         self._issue = issue
+
+        show_price = (issue.subtype == "to_unit")
+
+        # Fill in unit prices from catalog for lines that have none saved
+        if show_price:
+            zero_ids = list({l.item_type_id for l in lines if not l.unit_price})
+            if zero_ids:
+                conn = database.get_conn()
+                placeholders = ",".join("?" * len(zero_ids))
+                price_rows = conn.execute(
+                    f"SELECT id, unit_price FROM item_types WHERE id IN ({placeholders})",
+                    zero_ids,
+                ).fetchall()
+                price_map: dict[int, float] = {r["id"]: r["unit_price"] or 0.0 for r in price_rows}
+            else:
+                price_map = {}
+            # Build effective prices (catalog fallback when stored price is 0)
+            self._price_map = price_map
+        else:
+            self._price_map = {}
+
         self._lines = lines
 
         top = QHBoxLayout()
@@ -68,14 +90,22 @@ class DetailPanel(QWidget):
         top.addWidget(title)
         top.addStretch()
 
+        btn_excel = QPushButton("Xuất Chi Tiết")
+        btn_excel.setFixedHeight(30)
+        btn_excel.setFont(QFont(FONT, 11))
+        btn_excel.setStyleSheet(_BTN_GRAY)
+        btn_excel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_excel.clicked.connect(self._export_excel)
+        top.addWidget(btn_excel)
+
         if issue.subtype == "to_unit":
+            top.addSpacing(6)
             btn_print = QPushButton("Xuất Phiếu Xuất")
             btn_print.setFixedHeight(30)
             btn_print.setFont(QFont(FONT, 11))
             btn_print.setStyleSheet(_BTN_DARK)
             btn_print.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn_print.clicked.connect(self._export_word)
-            top.addSpacing(6)
             top.addWidget(btn_print)
 
         root.addLayout(top)
@@ -115,13 +145,12 @@ class DetailPanel(QWidget):
         grid.addWidget(pair("Nội dung", issue.notes), 2, 0, 1, 3)
         root.addLayout(grid)
 
-        sub_lbl = QLabel("Danh Sách Mặt hàng")
+        sub_lbl = QLabel("Danh Sách Mặt Hàng")
         sub_lbl.setFont(QFont(FONT, 11, QFont.Weight.Bold))
         sub_lbl.setStyleSheet("color: #111;")
         root.addWidget(sub_lbl)
 
-        show_price = (issue.subtype == "to_unit")
-        sub_cols = ["STT", "Tên Hàng", "ĐVT", "Số lượng"]
+        sub_cols = ["STT", "Tên Hàng", "ĐVT", "Số Lượng"]
         if show_price:
             sub_cols += ["Đơn Giá", "Thành Tiền"]
         sub_cols.append("Ghi Chú")
@@ -153,8 +182,8 @@ class DetailPanel(QWidget):
         ]
         if show_price:
             modes += [
-                (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Fixed, 110),
+                (QHeaderView.ResizeMode.Fixed, 120),
             ]
         modes.append((QHeaderView.ResizeMode.Stretch, None))
         for i, (mode, w) in enumerate(modes):
@@ -163,21 +192,27 @@ class DetailPanel(QWidget):
                 self._sub.setColumnWidth(i, w)
         root.addWidget(self._sub)
 
+        # Total row (below table)
         if show_price and lines:
-            total = sum(l.quantity * l.unit_price for l in lines)
-            if total:
-                tw = QWidget()
-                tw.setStyleSheet("background: transparent;")
-                th = QHBoxLayout(tw)
-                th.setContentsMargins(0, 4, 0, 0)
-                th.addStretch()
-                tl = QLabel(f"Tổng tiền: {total:,.0f} đ")
-                tl.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-                tl.setStyleSheet("color: #111;")
-                th.addWidget(tl)
-                root.addWidget(tw)
+            grand_total = sum(
+                l.quantity * (l.unit_price or self._price_map.get(l.item_type_id, 0.0))
+                for l in lines
+            )
+            tw = QWidget()
+            tw.setStyleSheet("background: transparent;")
+            th = QHBoxLayout(tw)
+            th.setContentsMargins(0, 4, 0, 0)
+            th.addStretch()
+            tl = QLabel(f"Tổng tiền: {grand_total:,.0f} đ" if grand_total else "Tổng tiền: —")
+            tl.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+            tl.setStyleSheet("color: #111;")
+            th.addWidget(tl)
+            root.addWidget(tw)
 
         self._load_lines(lines, show_price)
+
+    def _effective_price(self, line: IssueLine) -> float:
+        return line.unit_price or self._price_map.get(line.item_type_id, 0.0)
 
     def _load_lines(self, lines: list[IssueLine], show_price: bool):
         self._sub.setRowCount(0)
@@ -189,15 +224,15 @@ class DetailPanel(QWidget):
             r = self._sub.rowCount()
             self._sub.insertRow(r)
             self._sub.setRowHeight(r, 38)
-            cells = [str(i + 1), line.item_name,
-                     line.unit_of_measure, str(line.quantity)]
+            cells = [str(i + 1), line.item_name, line.unit_of_measure, str(line.quantity)]
             if show_price:
-                total = line.quantity * line.unit_price
+                price = self._effective_price(line)
+                total = line.quantity * price
                 cells += [
-                    f"{line.unit_price:,.0f}" if line.unit_price else "—",
+                    f"{price:,.0f}" if price else "—",
                     f"{total:,.0f}" if total else "—",
                 ]
-            cells.append(line.notes)
+            cells.append(line.notes or "")
             for c, val in enumerate(cells):
                 cell = QTableWidgetItem(val)
                 cell.setFont(QFont(FONT, 11))
@@ -205,6 +240,129 @@ class DetailPanel(QWidget):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self._sub.setItem(r, c, cell)
         self._sub.setFixedHeight(36 + max(1, len(lines)) * 38)
+
+    def _export_excel(self):
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        except ImportError:
+            QMessageBox.warning(self, "Lỗi", "Thư viện openpyxl chưa được cài đặt.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu file Excel",
+            f"PhieuXuat_{self._issue.reference_number}.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+        if not path:
+            return
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Phiếu Xuất"
+
+        show_price = (self._issue.subtype == "to_unit")
+
+        # ── Styles ───────────────────────────────────────────────────────────
+        hdr_font  = Font(name="Calibri", bold=True, size=11)
+        hdr_fill  = PatternFill("solid", fgColor="111111")
+        hdr_font_w = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+        body_font = Font(name="Calibri", size=10)
+        info_font = Font(name="Calibri", size=10)
+        bold_font = Font(name="Calibri", bold=True, size=10)
+        thin = Side(style="thin", color="DDDDDD")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        center = Alignment(horizontal="center", vertical="center")
+        left   = Alignment(horizontal="left",   vertical="center")
+        right  = Alignment(horizontal="right",  vertical="center")
+
+        dest_label = "Đơn Vị Nhận" if self._issue.subtype == "to_unit" else "Đơn Vị Mượn"
+        dest = self._issue.to_warehouse_name or self._issue.recipient or "—"
+
+        # ── Info block ────────────────────────────────────────────────────────
+        info_rows = [
+            ("Số Phiếu:",   self._issue.reference_number),
+            ("Kho Xuất:",   self._issue.from_warehouse_name),
+            (dest_label + ":", dest),
+            ("Người Lập:",  self._issue.created_by or "—"),
+            ("Ngày Xuất:",  self._issue.transaction_date),
+            ("Nội Dung:",   self._issue.notes or "—"),
+        ]
+        if self._issue.subtype == "to_unit":
+            info_rows.insert(5, ("Vận Chuyển:", self._issue.transporter or "—"))
+
+        for r_idx, (k, v) in enumerate(info_rows, start=1):
+            ws.cell(r_idx, 1, k).font = bold_font
+            ws.cell(r_idx, 2, v).font = info_font
+            ws.cell(r_idx, 1).alignment = left
+            ws.cell(r_idx, 2).alignment = left
+
+        blank_row = len(info_rows) + 2
+
+        # ── Table header ──────────────────────────────────────────────────────
+        col_headers = ["STT", "Tên Hàng", "ĐVT", "Số Lượng"]
+        col_widths   = [6,    36,         10,    10]
+        if show_price:
+            col_headers += ["Đơn Giá", "Thành Tiền"]
+            col_widths   += [16, 16]
+        col_headers.append("Ghi Chú")
+        col_widths.append(28)
+
+        for c_idx, (hdr, w) in enumerate(zip(col_headers, col_widths), start=1):
+            cell = ws.cell(blank_row, c_idx, hdr)
+            cell.font = hdr_font_w
+            cell.fill = hdr_fill
+            cell.alignment = center
+            cell.border = border
+            ws.column_dimensions[cell.column_letter].width = w
+
+        # ── Data rows ─────────────────────────────────────────────────────────
+        grand_total = 0.0
+        for i, line in enumerate(self._lines):
+            row_n = blank_row + 1 + i
+            price = self._effective_price(line)
+            line_total = line.quantity * price
+            grand_total += line_total
+
+            row_data = [i + 1, line.item_name, line.unit_of_measure, line.quantity]
+            row_aligns = [center, left, center, center]
+            if show_price:
+                row_data   += [price if price else "", line_total if line_total else ""]
+                row_aligns += [right, right]
+            row_data.append(line.notes or "")
+            row_aligns.append(left)
+
+            for c_idx, (val, aln) in enumerate(zip(row_data, row_aligns), start=1):
+                cell = ws.cell(row_n, c_idx, val)
+                cell.font = body_font
+                cell.alignment = aln
+                cell.border = border
+                if show_price and c_idx in (5, 6) and isinstance(val, (int, float)):
+                    cell.number_format = '#,##0'
+
+        # ── Total row ─────────────────────────────────────────────────────────
+        if show_price:
+            total_row = blank_row + 1 + len(self._lines)
+            label_col = len(col_headers) - 2
+            total_col = len(col_headers) - 1
+            lbl_cell = ws.cell(total_row, label_col, "Tổng tiền:")
+            lbl_cell.font = bold_font
+            lbl_cell.alignment = right
+            tot_cell = ws.cell(total_row, total_col, grand_total if grand_total else "—")
+            tot_cell.font = bold_font
+            tot_cell.alignment = right
+            if isinstance(grand_total, float) and grand_total:
+                tot_cell.number_format = '#,##0'
+
+        ws.row_dimensions[blank_row].height = 20
+        for i in range(len(self._lines)):
+            ws.row_dimensions[blank_row + 1 + i].height = 18
+
+        try:
+            wb.save(path)
+            QMessageBox.information(self, "Thành công", f"Đã xuất file:\n{path}")
+        except Exception as e:
+            QMessageBox.warning(self, "Lỗi", f"Không thể lưu file:\n{e}")
 
     def _export_word(self):
         from ui.word_export import export_xuat_kho

@@ -428,7 +428,7 @@ class TrangChuPage(QWidget):
         ).fetchone()["cnt"] or 0
 
         for icon, title, value, color in [
-            ("🔄", "Hàng DC Đang Cho Mượn",    dc_qty,      "#e65100" if dc_qty > 0 else "#111"),
+            ("🔄", "Hàng Dùng Chung Đang Cho Mượn",    dc_qty,      "#e65100" if dc_qty > 0 else "#111"),
             ("↩",  "H4 Từ ĐV Trả Về (30 Ngày)", h4_returned, "#111"),
             ("📋", "Phiếu TXL",                  txl_count,   "#d32f2f" if txl_count > 0 else "#111"),
         ]:

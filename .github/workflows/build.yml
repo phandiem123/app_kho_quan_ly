@@ -1,0 +1,23 @@
+name: Build App Windows
+on: [push] # Mỗi khi bạn push code lên GitHub, hệ thống sẽ tự build
+
+jobs:
+  build:
+    runs-on: windows-latest # Chạy trên máy ảo Windows của GitHub
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |
+        pip install customtkinter matplotlib openpyxl pyinstaller
+    - name: Run PyInstaller
+      run: |
+        pyinstaller --onefile --windowed --add-data="database/schema.sql;database" main.py
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: DCCD-Windows-App
+        path: dist/main.exe

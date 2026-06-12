@@ -1129,7 +1129,7 @@ class ThongKeKhoPage(QWidget):
         self._tab_btns.clear()
 
         for r in self._wh_list:
-            btn = QPushButton(r["code"])
+            btn = QPushButton(r["name"])
             btn.setFont(QFont(FONT, 11))
             btn.setFixedHeight(32)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1229,18 +1229,12 @@ class ThongKeKhoPage(QWidget):
             SELECT t.id AS item_type_id,
                    t.code AS item_code, t.name AS item_name,
                    t.unit_of_measure,
+                   t.total_lifespan_months,
                    SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
                    SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
                    SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
                    SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
                    SUM(i.quantity) AS total,
-                   MAX(CASE
-                       WHEN i.received_at_unit_date IS NOT NULL
-                       THEN CAST(
-                           (julianday(date('now','localtime'))
-                            - julianday(i.received_at_unit_date)) / 30.44 AS INTEGER)
-                       ELSE NULL
-                   END) AS max_months,
                    (SELECT tl.unit_price
                     FROM transaction_lines tl
                     JOIN transactions tx ON tx.id = tl.transaction_id
@@ -1297,18 +1291,12 @@ class ThongKeKhoPage(QWidget):
                    t.id AS item_type_id,
                    t.code AS item_code, t.name AS item_name,
                    t.unit_of_measure,
+                   t.total_lifespan_months,
                    SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
                    SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
                    SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
                    SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
                    SUM(i.quantity) AS total,
-                   MAX(CASE
-                       WHEN i.received_at_unit_date IS NOT NULL
-                       THEN CAST(
-                           (julianday(date('now','localtime'))
-                            - julianday(i.received_at_unit_date)) / 30.44 AS INTEGER)
-                       ELSE NULL
-                   END) AS max_months,
                    (SELECT tl2.unit_price
                     FROM transaction_lines tl2
                     JOIN transactions tx2 ON tx2.id = tl2.transaction_id
@@ -1402,9 +1390,9 @@ class ThongKeKhoPage(QWidget):
             self._table.insertRow(ri)
             self._table.setRowHeight(ri, 48)
 
-            mm = r["max_months"]
-            nien_han = f"{mm // 12} năm" if mm is not None else "—"
-            nien_han_red = mm is not None and mm >= 24
+            mm = r["total_lifespan_months"]
+            nien_han = f"{mm // 12} năm" if mm else "—"
+            nien_han_red = False
 
             dg = r["don_gia"]
             don_gia = f"{int(dg):,}".replace(",", ".") if dg else "—"
@@ -1443,7 +1431,7 @@ class ThongKeKhoPage(QWidget):
             if search_mode:
                 cells = [
                     (str(i + 1),           True,  False, None),
-                    (r["wh_code"],         True,  False, None),
+                    (r["wh_name"],         False, False, None),
                     (r["item_name"],       False, False, None),
                     (r["unit_of_measure"], True,  False, None),
                     (nien_han,             True,  nien_han_red, None),

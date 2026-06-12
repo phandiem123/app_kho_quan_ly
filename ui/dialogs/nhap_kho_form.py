@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QSpinBox, QTextEdit,
     QPushButton, QComboBox, QCompleter, QMessageBox, QFrame, QWidget,
 )
-from PyQt6.QtCore import Qt, QDate, pyqtSignal, QSortFilterProxyModel, QStringListModel
+from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtGui import QFont, QCursor
 from database.item_types import get_all as item_get_all
 from database.warehouses import get_all as wh_get_all
@@ -60,10 +60,15 @@ class LineItemRow(QWidget):
         self.combo = QComboBox()
         self.combo.setFixedHeight(34)
         self.combo.setMinimumWidth(190)
+        self.combo.setEditable(True)
+        self.combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.combo.setStyleSheet(_FIELD)
         self.combo.addItem("— Chọn mặt hàng —", None)
         for it in item_types:
             self.combo.addItem(it.name, it)
+        self.combo.lineEdit().setPlaceholderText("Tìm mặt hàng...")
+        self.combo.lineEdit().setReadOnly(False)
+        self._setup_search()
 
         self.lbl_unit = QLabel("—")
         self.lbl_unit.setFixedWidth(56)
@@ -148,6 +153,11 @@ class LineItemRow(QWidget):
         self.combo.currentIndexChanged.connect(self._on_item_changed)
         self.spin_qty.valueChanged.connect(self._recalc)
 
+    def _setup_search(self):
+        completer = self.combo.completer()
+        if completer:
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
 
     def _on_item_changed(self, _):
         it = self.combo.currentData()
@@ -177,6 +187,7 @@ class LineItemRow(QWidget):
                     self.combo.setCurrentIndex(i)
                     break
         self.combo.blockSignals(False)
+        self._setup_search()
 
     def _recalc(self):
         total = self.spin_qty.value() * self._unit_price
@@ -356,8 +367,7 @@ class NhapKhoFormDialog(QDialog):
         col_c.setSpacing(10)
         date_lbl = "Ngày Trả *" if self._subtype in ("unit_return", "event_return", "shared_return") else "Ngày Nhập *"
         col_c.addRow(lbl(date_lbl), self.f_date)
-        if self._subtype == "new":
-            col_c.addRow(lbl("Vận Chuyển"), self.f_transport)
+        col_c.addRow(lbl("Vận Chuyển"), self.f_transport)
 
         row1.addLayout(col_a, 1)
         row1.addLayout(col_b, 1)
@@ -582,9 +592,9 @@ class NhapKhoFormDialog(QDialog):
     def _fill(self, receipt: Receipt):
         self.f_ref.setText(receipt.reference_number)
         _set_combo_by_data(self.f_wh, receipt.to_warehouse_id)
+        self.f_transport.setText(receipt.transporter)
         if self._subtype == "new":
             self.f_supplier.setText(receipt.supplier)
-            self.f_transport.setText(receipt.transporter)
         elif self._subtype == "unit_return":
             _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
         elif self._subtype == "event_return":
@@ -619,10 +629,9 @@ class NhapKhoFormDialog(QDialog):
 
         from_wh_id = None
         supplier = ""
-        transporter = ""
+        transporter = self.f_transport.text().strip()
         if self._subtype == "new":
-            supplier    = self.f_supplier.text().strip()
-            transporter = self.f_transport.text().strip()
+            supplier = self.f_supplier.text().strip()
         elif self._subtype == "unit_return":
             from_wh_id = self.f_from_wh.currentData()
             if not from_wh_id:

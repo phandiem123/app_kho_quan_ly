@@ -733,7 +733,7 @@ class BieuDoPage(QWidget):
         row1 = QHBoxLayout()
         row1.setSpacing(20)
 
-        pie_frame, pie_v = _card_frame("Tỉ Lệ Chất Lượng Hàng Hóa")
+        pie_frame, pie_v = _card_frame("Tỉ Lệ Chất Lượng Hàng Hóa Đơn Vị")
         pie_header = QHBoxLayout()
         pie_header.setSpacing(8)
         pie_header.addStretch()
