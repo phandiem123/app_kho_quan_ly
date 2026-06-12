@@ -9,6 +9,13 @@ from PyQt6.QtGui import QFont, QCursor, QAction
 import database
 from database.xuat_kho import Issue, IssueLine, get_all, get_lines, delete as issue_delete
 
+_STATUS_COLORS = {
+    "Đã xuất":      ("#555",    "#f0f0f0"),
+    "Chưa trả hết": ("#92400e", "#fef3c7"),
+    "Hoàn thành":   ("#14532d", "#dcfce7"),
+}
+_ALL_STATUSES = ["Tất cả", "Đã xuất", "Chưa trả hết", "Hoàn thành"]
+
 FONT = "Segoe UI"
 
 _TABS     = ["Xuất Đi Đơn Vị", "Xuất Hàng Dùng Chung"]
@@ -16,7 +23,8 @@ _SUBTYPES = ["to_unit", "shared_loan"]
 
 _COLS = [
     "STT", "Số Phiếu", "Số M.Hàng", "Kho Xuất",
-    "Đơn Vị Nhận", "Người Lập", "Ngày Xuất", "Nội dung", "Vận Chuyển", "",
+    "Đơn Vị Nhận", "Người Lập", "Ngày Xuất", "Nội dung", "Vận Chuyển",
+    "Tình Trạng", "",
 ]
 
 _TABLE_STYLE = """
@@ -418,6 +426,38 @@ class XuatKhoPage(QWidget):
         self._search.textChanged.connect(self._apply_filter)
         top.addWidget(self._search)
 
+        self._status_combo = QComboBox()
+        self._status_combo.setFixedHeight(34)
+        self._status_combo.setFont(QFont(FONT, 12))
+        self._status_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 32px 0 12px; background: white;
+                color: #111; min-width: 150px;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding; subcontrol-position: center right;
+                width: 28px; border-left: 1px solid #e0e0e0;
+                border-top-right-radius: 8px; border-bottom-right-radius: 8px;
+                background: white;
+            }
+            QComboBox::down-arrow {
+                width: 10px; height: 10px; image: none;
+                border-top: 5px solid #111;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+            }
+            QComboBox QAbstractItemView {
+                border: 1px solid #e0e0e0; border-radius: 6px;
+                background: white; color: #111; selection-background-color: #f0f0f0;
+            }
+        """)
+        for s in _ALL_STATUSES:
+            self._status_combo.addItem(s)
+        self._status_combo.currentIndexChanged.connect(self._apply_filter)
+        self._status_combo.setVisible(False)
+        top.addWidget(self._status_combo)
+
         self._year_combo = QComboBox()
         self._year_combo.setFixedHeight(34)
         self._year_combo.setFont(QFont(FONT, 12))
@@ -486,6 +526,7 @@ class XuatKhoPage(QWidget):
             (QHeaderView.ResizeMode.Fixed, 100),
             (QHeaderView.ResizeMode.Stretch, None),
             (QHeaderView.ResizeMode.Fixed, 110),
+            (QHeaderView.ResizeMode.Fixed, 120),
             (QHeaderView.ResizeMode.Fixed, 52),
         ]):
             h.setSectionResizeMode(i, mode)
@@ -515,6 +556,7 @@ class XuatKhoPage(QWidget):
         self._active_subtype = _SUBTYPES[idx]
         self._apply_tab_style(idx)
         self._search.clear()
+        self._status_combo.setCurrentIndex(0)
         self._update_col_visibility()
         dest_lbl = "Đơn Vị Mượn" if self._active_subtype == "shared_loan" else "Đơn Vị Nhận"
         self._table.setHorizontalHeaderItem(4, _hdr_item(dest_lbl))
@@ -535,7 +577,10 @@ class XuatKhoPage(QWidget):
                 """)
 
     def _update_col_visibility(self):
-        self._table.setColumnHidden(8, self._active_subtype != "to_unit")
+        is_shared = self._active_subtype == "shared_loan"
+        self._table.setColumnHidden(8, is_shared)   # Vận Chuyển — hidden for shared
+        self._table.setColumnHidden(9, not is_shared)  # Tình Trạng — only for shared
+        self._status_combo.setVisible(is_shared)
 
     def refresh(self):
         self._reload()
@@ -547,9 +592,10 @@ class XuatKhoPage(QWidget):
 
     def _apply_filter(self):
         q = self._search.text().strip().lower()
-        data = [
-            r for r in self._cache
-            if not q or any(q in s for s in [
+        selected_status = self._status_combo.currentText()
+        data = []
+        for r in self._cache:
+            if q and not any(q in s for s in [
                 r.reference_number.lower(),
                 r.from_warehouse_name.lower(),
                 r.to_warehouse_name.lower(),
@@ -558,8 +604,12 @@ class XuatKhoPage(QWidget):
                 (r.transporter or "").lower(),
                 (r.notes or "").lower(),
                 r.transaction_date.lower(),
-            ])
-        ]
+                r.status.lower(),
+            ]):
+                continue
+            if selected_status != "Tất cả" and r.status != selected_status:
+                continue
+            data.append(r)
         self._load_table(data)
 
     def _load_table(self, issues: list[Issue]):
@@ -587,6 +637,10 @@ class XuatKhoPage(QWidget):
                 if c == 0:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self._table.setItem(dr, c, item)
+
+            # Status badge (col 9) — only meaningful for shared_loan
+            if r.status:
+                self._table.setCellWidget(dr, 9, _make_status_badge(r.status))
 
             dots = QPushButton("···")
             dots.setFlat(True)
@@ -677,3 +731,21 @@ def _hdr_item(text: str) -> QTableWidgetItem:
     item = QTableWidgetItem(text)
     item.setFont(QFont(FONT, 12))
     return item
+
+
+def _make_status_badge(status: str) -> QWidget:
+    fg, bg = _STATUS_COLORS.get(status, ("#555", "#f0f0f0"))
+    container = QWidget()
+    container.setStyleSheet("background: transparent;")
+    h = QHBoxLayout(container)
+    h.setContentsMargins(8, 0, 8, 0)
+    h.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    badge = QLabel(status)
+    badge.setFont(QFont(FONT, 10, QFont.Weight.Bold))
+    badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    badge.setStyleSheet(
+        f"QLabel {{ background: {bg}; color: {fg}; border-radius: 8px;"
+        f" padding: 3px 10px; border: 1px solid {bg}; }}"
+    )
+    h.addWidget(badge)
+    return container

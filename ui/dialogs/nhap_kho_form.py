@@ -10,6 +10,7 @@ from database.warehouses import get_all as wh_get_all
 from database.receipts import (
     Receipt, ReceiptLine, insert, update, ref_exists, get_lines,
 )
+from database.xuat_kho import get_loan_events
 
 FONT = "Segoe UI"
 
@@ -316,6 +317,18 @@ class NhapKhoFormDialog(QDialog):
         self._shared_source = "unit_return"
         self._btn_unit_src = self._btn_event_src = None
         self._lbl_unit_src = self._lbl_event_src = None
+        self._loan_tx_id: int | None = None
+
+        # Build event combo for event_return / shared_return-event source
+        self.f_event_combo = QComboBox()
+        self.f_event_combo.setFont(QFont(FONT, 12))
+        self.f_event_combo.setFixedHeight(36)
+        self.f_event_combo.setStyleSheet(_FIELD)
+        self.f_event_combo.addItem("— Chọn sự kiện —", None)
+        for ev in get_loan_events():
+            label = f"{ev['supplier']}  ({ev['reference_number']}, {ev['transaction_date']})"
+            self.f_event_combo.addItem(label, ev["id"])
+        self.f_event_combo.currentIndexChanged.connect(self._on_event_combo_changed)
 
         row1 = QHBoxLayout()
         row1.setSpacing(24)
@@ -334,7 +347,7 @@ class NhapKhoFormDialog(QDialog):
         elif self._subtype == "unit_return":
             col_b.addRow(lbl("Đơn Vị Trả *"), self.f_from_wh)
         elif self._subtype == "event_return":
-            col_b.addRow(lbl("Tên Sự Kiện"), self.f_supplier)
+            col_b.addRow(lbl("Tên Sự Kiện *"), self.f_event_combo)
         elif self._subtype == "shared_return":
             tgl_w = QWidget()
             tgl_w.setFixedHeight(32)
@@ -353,10 +366,10 @@ class NhapKhoFormDialog(QDialog):
             self._btn_event_src.clicked.connect(lambda: self._set_shared_source("event_return"))
             col_b.addRow(lbl("Nguồn Trả *"), tgl_w)
             self._lbl_unit_src = lbl("Đơn Vị Trả *")
-            self._lbl_event_src = lbl("Tên Sự Kiện")
+            self._lbl_event_src = lbl("Tên Sự Kiện *")
             col_b.addRow(self._lbl_unit_src, self.f_from_wh)
-            col_b.addRow(self._lbl_event_src, self.f_supplier)
-            self.f_supplier.setVisible(False)
+            col_b.addRow(self._lbl_event_src, self.f_event_combo)
+            self.f_event_combo.setVisible(False)
             self._lbl_event_src.setVisible(False)
             self._update_source_toggle_style()
         else:
@@ -540,8 +553,11 @@ class NhapKhoFormDialog(QDialog):
             self.f_from_wh.setVisible(is_unit)
         if self._lbl_event_src:
             self._lbl_event_src.setVisible(not is_unit)
-            self.f_supplier.setVisible(not is_unit)
+            self.f_event_combo.setVisible(not is_unit)
         self._update_source_toggle_style()
+
+    def _on_event_combo_changed(self, _):
+        self._loan_tx_id = self.f_event_combo.currentData()
 
     def _refresh_all_combos(self):
         used: set[int] = set()
@@ -599,14 +615,16 @@ class NhapKhoFormDialog(QDialog):
         elif self._subtype == "unit_return":
             _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
         elif self._subtype == "event_return":
-            self.f_supplier.setText(receipt.supplier)
+            _set_combo_by_data(self.f_event_combo, receipt.loan_transaction_id)
+            self._loan_tx_id = receipt.loan_transaction_id
         elif self._subtype == "shared_return":
             if receipt.from_warehouse_id:
                 self._set_shared_source("unit_return")
                 _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
             else:
                 self._set_shared_source("event_return")
-                self.f_supplier.setText(receipt.supplier or "")
+                _set_combo_by_data(self.f_event_combo, receipt.loan_transaction_id)
+                self._loan_tx_id = receipt.loan_transaction_id
         else:
             _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
         self.f_person.setText(receipt.created_by)
@@ -631,6 +649,7 @@ class NhapKhoFormDialog(QDialog):
         from_wh_id = None
         supplier = ""
         transporter = self.f_transport.text().strip()
+        loan_tx_id: int | None = None
         if self._subtype == "new":
             supplier = self.f_supplier.text().strip()
         elif self._subtype == "unit_return":
@@ -638,14 +657,23 @@ class NhapKhoFormDialog(QDialog):
             if not from_wh_id:
                 return self._err("Vui lòng chọn Đơn Vị Trả.")
         elif self._subtype == "event_return":
-            supplier = self.f_supplier.text().strip()
+            loan_tx_id = self.f_event_combo.currentData()
+            if not loan_tx_id:
+                return self._err("Vui lòng chọn Sự Kiện.")
+            # Extract event name from combo label (text before first "  (")
+            combo_text = self.f_event_combo.currentText()
+            supplier = combo_text.split("  (")[0] if "  (" in combo_text else combo_text
         elif self._subtype == "shared_return":
             if self._shared_source == "unit_return":
                 from_wh_id = self.f_from_wh.currentData()
                 if not from_wh_id:
                     return self._err("Vui lòng chọn Đơn Vị Trả.")
             else:
-                supplier = self.f_supplier.text().strip()
+                loan_tx_id = self.f_event_combo.currentData()
+                if not loan_tx_id:
+                    return self._err("Vui lòng chọn Sự Kiện.")
+                combo_text = self.f_event_combo.currentText()
+                supplier = combo_text.split("  (")[0] if "  (" in combo_text else combo_text
         else:
             from_wh_id = self.f_from_wh.currentData()
             if not from_wh_id:
@@ -676,6 +704,7 @@ class NhapKhoFormDialog(QDialog):
             created_by=self.f_person.text().strip(),
             transporter=transporter,
             notes=self.f_notes.toPlainText().strip(),
+            loan_transaction_id=loan_tx_id,
             lines=lines,
         )
         if self._subtype in ("unit_return", "event_return", "shared_return"):

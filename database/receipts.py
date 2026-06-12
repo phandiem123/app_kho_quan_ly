@@ -48,6 +48,7 @@ class Receipt:
     transporter: str = ""
     notes: str = ""
     line_count: int = 0
+    loan_transaction_id: int | None = None
     lines: list[ReceiptLine] = field(default_factory=list)
 
     @property
@@ -80,7 +81,7 @@ def get_all(year: int | None = None, subtype: str = "new") -> list[Receipt]:
                t.to_warehouse_id,  wto.name AS to_warehouse_name,
                t.from_warehouse_id, wfrom.name AS from_warehouse_name,
                t.transaction_date, t.supplier, t.created_by,
-               t.transporter, t.notes,
+               t.transporter, t.notes, t.loan_transaction_id,
                COUNT(tl.id) AS line_count
         FROM transactions t
         LEFT JOIN warehouses wto   ON wto.id  = t.to_warehouse_id
@@ -104,6 +105,7 @@ def get_all(year: int | None = None, subtype: str = "new") -> list[Receipt]:
             created_by=r["created_by"] or "",
             transporter=r["transporter"] or "",
             notes=r["notes"] or "",
+            loan_transaction_id=r["loan_transaction_id"],
             line_count=r["line_count"] or 0,
         )
         for r in rows
@@ -180,12 +182,14 @@ def insert(receipt: Receipt) -> int:
     cur = conn.execute("""
         INSERT INTO transactions
             (type, reference_number, from_warehouse_id, to_warehouse_id,
-             transaction_date, supplier, created_by, transporter, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             transaction_date, supplier, created_by, transporter, notes,
+             loan_transaction_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (_TX[subtype], receipt.reference_number,
           receipt.from_warehouse_id, receipt.to_warehouse_id,
           receipt.transaction_date, receipt.supplier,
-          receipt.created_by, receipt.transporter, receipt.notes))
+          receipt.created_by, receipt.transporter, receipt.notes,
+          receipt.loan_transaction_id))
     tx_id = cur.lastrowid
 
     for line in receipt.lines:
@@ -262,12 +266,14 @@ def update(receipt: Receipt) -> None:
     conn.execute("""
         UPDATE transactions SET
             type=?, reference_number=?, from_warehouse_id=?, to_warehouse_id=?,
-            transaction_date=?, supplier=?, created_by=?, transporter=?, notes=?
+            transaction_date=?, supplier=?, created_by=?, transporter=?, notes=?,
+            loan_transaction_id=?
         WHERE id=?
     """, (_TX[subtype], receipt.reference_number,
           receipt.from_warehouse_id, receipt.to_warehouse_id,
           receipt.transaction_date, receipt.supplier,
-          receipt.created_by, receipt.transporter, receipt.notes, receipt.id))
+          receipt.created_by, receipt.transporter, receipt.notes,
+          receipt.loan_transaction_id, receipt.id))
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (receipt.id,))
     for line in receipt.lines:
         ql = line.quality_level if subtype == "from_unit" else _QUALITY[subtype]

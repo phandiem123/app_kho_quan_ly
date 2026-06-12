@@ -740,6 +740,14 @@ class XuatKhoFormDialog(QDialog):
         if not lines:
             self._err("Vui lòng thêm ít nhất một mặt hàng.")
             return None
+        zero_lines = [l.item_name for l in lines if l.quantity <= 0]
+        if zero_lines:
+            self._err(
+                f"Mặt hàng sau đã hết tồn kho, không thể xuất:\n"
+                + "\n".join(f"  • {n}" for n in zero_lines)
+                + "\n\nVui lòng xóa các dòng hàng này trước khi lưu."
+            )
+            return None
 
         if not self._editing:
             self._reload_stock_map()

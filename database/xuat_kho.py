@@ -36,6 +36,7 @@ class Issue:
     transporter: str = ""
     notes: str = ""
     line_count: int = 0
+    status: str = ""
     lines: list[IssueLine] = field(default_factory=list)
 
     @property
@@ -67,7 +68,7 @@ def get_all(year: int | None = None, subtype: str = "to_unit") -> list[Issue]:
         GROUP BY t.id
         ORDER BY t.transaction_date DESC, t.id DESC
     """, params).fetchall()
-    return [
+    issues = [
         Issue(
             id=r["id"],
             tx_type=r["tx_type"],
@@ -85,6 +86,92 @@ def get_all(year: int | None = None, subtype: str = "to_unit") -> list[Issue]:
         )
         for r in rows
     ]
+    if subtype == "shared_loan" and issues:
+        statuses = _batch_status(conn, issues)
+        for iss in issues:
+            iss.status = statuses.get(iss.id, "Đã xuất")
+    return issues
+
+
+def _batch_status(conn, issues: list[Issue]) -> dict[int, str]:
+    """Compute phiếu status for a list of MUON issues in minimal queries."""
+    ids = [i.id for i in issues]
+    ph = ",".join("?" * len(ids))
+
+    # Quantities loaned per (tx_id, item_type_id)
+    loaned_rows = conn.execute(
+        f"SELECT transaction_id, item_type_id, SUM(quantity) AS qty "
+        f"FROM transaction_lines WHERE transaction_id IN ({ph}) "
+        f"GROUP BY transaction_id, item_type_id",
+        ids,
+    ).fetchall()
+    loaned: dict[int, dict[int, int]] = {}
+    for r in loaned_rows:
+        loaned.setdefault(r["transaction_id"], {})[r["item_type_id"]] = r["qty"]
+
+    returned: dict[int, dict[int, int]] = {}
+
+    # Event loans: linked via loan_transaction_id on TRA transactions
+    event_ids = [i.id for i in issues if i.to_warehouse_id is None]
+    if event_ids:
+        eph = ",".join("?" * len(event_ids))
+        ev_rows = conn.execute(
+            f"SELECT t.loan_transaction_id AS muon_id, tl.item_type_id, SUM(tl.quantity) AS qty "
+            f"FROM transactions t JOIN transaction_lines tl ON tl.transaction_id = t.id "
+            f"WHERE t.type = 'TRA' AND t.loan_transaction_id IN ({eph}) "
+            f"GROUP BY t.loan_transaction_id, tl.item_type_id",
+            event_ids,
+        ).fetchall()
+        for r in ev_rows:
+            returned.setdefault(r["muon_id"], {})[r["item_type_id"]] = r["qty"]
+
+    # Unit loans: match by (from_wh → to_wh) warehouse pair
+    unit_pairs: dict[tuple, list[int]] = {}
+    for i in issues:
+        if i.to_warehouse_id is not None:
+            unit_pairs.setdefault(
+                (i.to_warehouse_id, i.from_warehouse_id), []
+            ).append(i.id)
+
+    for (to_wh, from_wh), issue_ids in unit_pairs.items():
+        ret_rows = conn.execute(
+            "SELECT tl.item_type_id, SUM(tl.quantity) AS qty "
+            "FROM transactions t JOIN transaction_lines tl ON tl.transaction_id = t.id "
+            "WHERE t.type = 'TRA' AND t.from_warehouse_id = ? AND t.to_warehouse_id = ? "
+            "GROUP BY tl.item_type_id",
+            (to_wh, from_wh),
+        ).fetchall()
+        if ret_rows:
+            ret_map = {r["item_type_id"]: r["qty"] for r in ret_rows}
+            for iid in issue_ids:
+                returned[iid] = ret_map
+
+    result: dict[int, str] = {}
+    for iss in issues:
+        iss_loaned = loaned.get(iss.id, {})
+        iss_returned = returned.get(iss.id, {})
+        if not iss_returned:
+            result[iss.id] = "Đã xuất"
+        elif all(iss_returned.get(k, 0) >= v for k, v in iss_loaned.items()):
+            result[iss.id] = "Hoàn thành"
+        else:
+            result[iss.id] = "Chưa trả hết"
+    return result
+
+
+def get_loan_events() -> list[dict]:
+    """Return all MUON-to-event transactions for populating the event dropdown."""
+    conn = database.get_conn()
+    rows = conn.execute("""
+        SELECT t.id, t.reference_number, t.supplier, t.transaction_date,
+               wfrom.name AS from_warehouse_name
+        FROM transactions t
+        LEFT JOIN warehouses wfrom ON wfrom.id = t.from_warehouse_id
+        WHERE t.type = 'MUON' AND t.to_warehouse_id IS NULL
+          AND t.supplier IS NOT NULL AND TRIM(t.supplier) != ''
+        ORDER BY t.transaction_date DESC, t.id DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_lines(transaction_id: int) -> list[IssueLine]:

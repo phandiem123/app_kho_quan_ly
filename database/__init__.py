@@ -32,6 +32,7 @@ def _migrate():
         "ALTER TABLE transactions ADD COLUMN transporter TEXT",
         "ALTER TABLE transaction_lines ADD COLUMN unit_price REAL NOT NULL DEFAULT 0",
         "ALTER TABLE item_types ADD COLUMN unit_price REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE transactions ADD COLUMN loan_transaction_id INTEGER REFERENCES transactions(id)",
     ]:
         try:
             _conn.execute(sql)
