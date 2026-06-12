@@ -1,23 +1,30 @@
 name: Build App Windows
-on: [push] # Mỗi khi bạn push code lên GitHub, hệ thống sẽ tự build
+on: [push]
 
 jobs:
   build:
-    runs-on: windows-latest # Chạy trên máy ảo Windows của GitHub
+    runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v3
+    # 1. Nâng cấp lên v4 để tránh lỗi tương thích
+    - uses: actions/checkout@v4 
+    
     - name: Set up Python
-      uses: actions/setup-python@v4
+      # 2. Nâng cấp lên v5 để chạy mượt mà nhất
+      uses: actions/setup-python@v5 
       with:
         python-version: '3.10'
+        
     - name: Install dependencies
       run: |
         pip install customtkinter matplotlib openpyxl pyinstaller
+        
     - name: Run PyInstaller
       run: |
         pyinstaller --onefile --windowed --add-data="database/schema.sql;database" main.py
+        
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      # 3. ĐÂY LÀ ĐOẠN SỬA LỖI CHÍNH: Chuyển v3 thành v4
+      uses: actions/upload-artifact@v4 
       with:
         name: DCCD-Windows-App
         path: dist/main.exe
