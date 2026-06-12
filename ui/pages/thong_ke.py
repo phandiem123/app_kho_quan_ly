@@ -5,10 +5,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QPushButton, QLineEdit, QComboBox, QCompleter,
-    QDialog,
+    QDialog, QMenu,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QCursor, QColor
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QRect
+from PyQt6.QtGui import QFont, QCursor, QColor, QPen, QAction, QPainterPath
 import datetime
 import database
 
@@ -34,6 +34,178 @@ _BADGE = {
     "H3": ("H3", "#e65100", "#fff3e0"),
     "H4": ("H4", "#c0392b", "#fdecea"),
 }
+
+
+class _SmartHeader(QHeaderView):
+    """Header với sort arrows, eye-icon ẩn/hiện, và drag reorder."""
+    sortRequested = pyqtSignal(int, bool)   # (logical_col, ascending)
+    visToggled    = pyqtSignal(int, bool)   # (logical_col, is_now_visible)
+
+    _H = 40
+
+    def __init__(self, skip: set | frozenset = frozenset({0}), parent=None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self._skip = frozenset(skip)
+        self._scol = -1
+        self._sasc = True
+        self.setSectionsMovable(True)
+        self.setSectionsClickable(True)
+        self.setHighlightSections(False)
+
+    def sizeHint(self):
+        s = super().sizeHint()
+        return QSize(s.width(), self._H)
+
+    def paintSection(self, painter, rect, li):
+        if not rect.isValid():
+            return
+        painter.save()
+        painter.setClipRect(rect)
+        painter.setRenderHint(painter.RenderHint.Antialiasing)
+
+        sorted_col = li == self._scol
+        painter.fillRect(rect, QColor("#f0f5ff") if sorted_col else QColor("white"))
+        painter.setPen(QPen(QColor("#efefef")))
+        painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
+
+        label = self.model().headerData(li, Qt.Orientation.Horizontal) or ""
+        is_skip = li in self._skip
+        cy = float(rect.top() + rect.height() / 2)
+        right_pad = 8
+
+        if not is_skip:
+            # ── Sort arrows: ↑↓ always visible ──────────────────────────
+            aw = 9
+            ax = float(rect.right() - aw - 8)
+
+            up_clr = QColor("#2255cc") if (sorted_col and self._sasc)     else QColor("#ddd")
+            dn_clr = QColor("#2255cc") if (sorted_col and not self._sasc) else QColor("#ddd")
+
+            up = QPainterPath()
+            up.moveTo(ax + aw / 2, cy - 7)
+            up.lineTo(ax,          cy - 1)
+            up.lineTo(ax + aw,     cy - 1)
+            up.closeSubpath()
+            painter.fillPath(up, up_clr)
+
+            dn = QPainterPath()
+            dn.moveTo(ax + aw / 2, cy + 7)
+            dn.lineTo(ax,          cy + 1)
+            dn.lineTo(ax + aw,     cy + 1)
+            dn.closeSubpath()
+            painter.fillPath(dn, dn_clr)
+
+            right_pad += aw + 10
+
+        lrect = QRect(rect.left() + 10, rect.top(),
+                      rect.width() - right_pad - 8, rect.height())
+        painter.setFont(QFont(FONT, 11))
+        painter.setPen(QColor("#1a3a8a" if sorted_col else "#111"))
+        painter.drawText(lrect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
+        painter.restore()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        li = self.logicalIndexAt(event.pos())
+        if li < 0 or li in self._skip:
+            super().mousePressEvent(event)
+            return
+        if self._scol == li:
+            self._sasc = not self._sasc
+        else:
+            self._scol = li
+            self._sasc = True
+        self.sortRequested.emit(self._scol, self._sasc)
+        self.viewport().update()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            li = self.logicalIndexAt(event.pos())
+            if li >= 0 and li not in self._skip:
+                self.setSectionHidden(li, True)
+                self.visToggled.emit(li, False)
+                self.viewport().update()
+                return
+        super().mouseDoubleClickEvent(event)
+
+    def reset_sort(self):
+        self._scol = -1
+        self._sasc = True
+        self.viewport().update()
+
+    def set_skip(self, skip):
+        self._skip = frozenset(skip)
+        self.viewport().update()
+
+
+class _ColVisBtn(QPushButton):
+    """Nút 'Hiển thị thông tin' mở dropdown với checkbox ẩn/hiện từng cột."""
+
+    def __init__(self, parent=None):
+        super().__init__("Hiển thị thông tin  ▾", parent)
+        self.setFixedHeight(34)
+        self.setFont(QFont(FONT, 11))
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.setStyleSheet("""
+            QPushButton { border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 14px; background: white; color: #111; }
+            QPushButton:hover { background: #f5f5f5; }
+        """)
+        self._menu = QMenu(self)
+        self._menu.setStyleSheet("""
+            QMenu { background: white; border: 1px solid #e0e0e0;
+                    border-radius: 8px; padding: 4px; min-width: 160px; }
+            QMenu::item { padding: 7px 28px 7px 10px; border-radius: 4px;
+                          color: #111; font-size: 12px; }
+            QMenu::item:selected { background: #f5f5f5; }
+            QMenu::indicator { width: 14px; height: 14px; margin-left: 4px; }
+            QMenu::indicator:checked { image: none; background: #3366cc;
+                border-radius: 3px; }
+            QMenu::indicator:unchecked { background: white;
+                border: 1px solid #ccc; border-radius: 3px; }
+        """)
+        self._table: QTableWidget | None = None
+        self._hdr: _SmartHeader | None = None
+        self._actions: dict[int, QAction] = {}
+        self.clicked.connect(self._show)
+
+    def bind(self, table: QTableWidget, hdr, col_names: list[str], skip: set):
+        self._table = table
+        self._hdr = hdr
+        self._menu.clear()
+        self._actions.clear()
+        for i, name in enumerate(col_names):
+            if i in skip:
+                continue
+            act = QAction(name, self._menu)
+            act.setCheckable(True)
+            act.setChecked(True)
+            act.toggled.connect(lambda chk, c=i: self._toggle(c, chk))
+            self._actions[i] = act
+            self._menu.addAction(act)
+
+    def _show(self):
+        if self._table:
+            for li, act in self._actions.items():
+                act.blockSignals(True)
+                act.setChecked(not self._table.isColumnHidden(li))
+                act.blockSignals(False)
+        self._menu.exec(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def _toggle(self, li: int, checked: bool):
+        if self._table:
+            self._table.setColumnHidden(li, not checked)
+            if self._hdr:
+                self._hdr.viewport().update()
+
+    def on_vis_toggled(self, li: int, visible: bool):
+        if li in self._actions:
+            a = self._actions[li]
+            a.blockSignals(True)
+            a.setChecked(visible)
+            a.blockSignals(False)
 
 
 def _apply_inv_qty(wh_id: int, item_type_id: int, quality_level: str, new_qty: int):
@@ -619,6 +791,30 @@ class ThongKeSharedPage(QWidget):
         ("txl",  "Chờ TXL (H4)"),
     ]
 
+    _SORT_KEYS: dict[str, dict] = {
+        "ton": {
+            1: lambda r: (r["item_name"] or "").lower(),
+            2: lambda r: (r["unit_of_measure"] or "").lower(),
+            3: lambda r: r["h1"],
+            4: lambda r: r["h2"],
+            5: lambda r: r["h3"],
+            6: lambda r: r["total"],
+        },
+        "muon": {
+            1: lambda r: (r["reference_number"] or "").lower(),
+            2: lambda r: r["transaction_date"] or "",
+            3: lambda r: (r["item_name"] or "").lower(),
+            4: lambda r: (r["unit_of_measure"] or "").lower(),
+            5: lambda r: r["quantity"],
+            6: lambda r: (r["borrower"] or "").lower(),
+        },
+        "txl": {
+            1: lambda r: (r["item_name"] or "").lower(),
+            2: lambda r: (r["unit_of_measure"] or "").lower(),
+            3: lambda r: r["total"],
+        },
+    }
+
     def __init__(self):
         super().__init__()
         self.setStyleSheet("ThongKeSharedPage { background: #fafafa; }")
@@ -627,6 +823,9 @@ class ThongKeSharedPage(QWidget):
         self._raw_ton:  list = []
         self._raw_muon: list = []
         self._raw_txl:  list = []
+        self._sort: dict[str, tuple[int, bool]] = {
+            "ton": (-1, True), "muon": (-1, True), "txl": (-1, True),
+        }
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -736,6 +935,7 @@ class ThongKeSharedPage(QWidget):
         tab_h.setContentsMargins(0, 4, 0, 4)
         tab_h.setSpacing(6)
         self._tab_btns: dict[str, QPushButton] = {}
+        self._vis_btn = _ColVisBtn()
         for key, label in self._TABS:
             btn = QPushButton(label)
             btn.setFont(QFont(FONT, 11))
@@ -745,6 +945,7 @@ class ThongKeSharedPage(QWidget):
             btn.clicked.connect(lambda _, k=key: self._on_tab(k))
             tab_h.addWidget(btn)
         tab_h.addStretch()
+        tab_h.addWidget(self._vis_btn)
         self._apply_tab_style()
         root.addWidget(tab_frame)
         root.addSpacing(8)
@@ -757,7 +958,9 @@ class ThongKeSharedPage(QWidget):
         tbl_v = QVBoxLayout(tbl_card)
         tbl_v.setContentsMargins(0, 0, 0, 0)
 
+        self._smart_hdr = _SmartHeader({0})
         self._table = QTableWidget(0, len(self._COLS_TON))
+        self._table.setHorizontalHeader(self._smart_hdr)
         self._table.setHorizontalHeaderLabels(self._COLS_TON)
         self._table.verticalHeader().setVisible(False)
         self._table.setShowGrid(False)
@@ -768,6 +971,8 @@ class ThongKeSharedPage(QWidget):
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setStyleSheet(_TABLE_STYLE)
+        self._smart_hdr.sortRequested.connect(self._on_sort)
+        self._smart_hdr.visToggled.connect(self._vis_btn.on_vis_toggled)
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
 
@@ -790,7 +995,12 @@ class ThongKeSharedPage(QWidget):
     # ── Interactions ──────────────────────────────────────────────────────────
 
     def _on_tab(self, key: str):
+        # Save sort state of current tab, restore for new tab
+        self._sort[self._active_tab] = (self._smart_hdr._scol, self._smart_hdr._sasc)
         self._active_tab = key
+        sc, sa = self._sort.get(key, (-1, True))
+        self._smart_hdr._scol = sc
+        self._smart_hdr._sasc = sa
         self._apply_tab_style()
         self._apply_filter()
 
@@ -922,11 +1132,17 @@ class ThongKeSharedPage(QWidget):
     def _setup_cols(self, cols: list[str], specs: list[tuple]):
         self._table.setColumnCount(len(cols))
         self._table.setHorizontalHeaderLabels(cols)
+        for i in range(len(cols)):
+            self._table.setColumnHidden(i, False)
         h = self._table.horizontalHeader()
         for i, (mode, w) in enumerate(specs):
             h.setSectionResizeMode(i, mode)
             if w:
                 self._table.setColumnWidth(i, w)
+        skip = {0}
+        self._smart_hdr.set_skip(skip)
+        self._vis_btn.bind(self._table, self._smart_hdr, cols, skip)
+        self._smart_hdr.viewport().update()
 
     def _mk(self, val: str, center=False, clr=None) -> QTableWidgetItem:
         cell = QTableWidgetItem(val)
@@ -937,7 +1153,21 @@ class ThongKeSharedPage(QWidget):
             cell.setForeground(Qt.GlobalColor.red)
         return cell
 
+    def _sort_rows(self, rows):
+        sc, sa = self._sort.get(self._active_tab, (-1, True))
+        if sc <= 0:
+            return rows
+        fn = self._SORT_KEYS.get(self._active_tab, {}).get(sc)
+        if fn is None:
+            return rows
+        return sorted(rows, key=fn, reverse=not sa)
+
+    def _on_sort(self, logical: int, ascending: bool):
+        self._sort[self._active_tab] = (logical, ascending)
+        self._apply_filter()
+
     def _load_ton(self, rows):
+        rows = self._sort_rows(rows)
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_TON, [
             (F, 52), (S, None), (F, 60),
@@ -960,6 +1190,7 @@ class ThongKeSharedPage(QWidget):
                 self._table.setItem(ri, c, self._mk(*args))
 
     def _load_muon(self, rows):
+        rows = self._sort_rows(rows)
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_MUON, [
             (F, 52), (F, 110), (F, 110), (S, None),
@@ -982,6 +1213,7 @@ class ThongKeSharedPage(QWidget):
                 self._table.setItem(ri, c, self._mk(*args))
 
     def _load_txl(self, rows):
+        rows = self._sort_rows(rows)
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_TXL, [
             (F, 52), (S, None), (F, 60), (F, 80),
@@ -1010,6 +1242,30 @@ class ThongKeKhoPage(QWidget):
     _COLS_SEARCH = ["STT", "Kho", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
                     "H1", "H2", "H3", "H4", "Tổng"]
 
+    _SORT_KEYS_NORMAL: dict = {
+        1: lambda r: (r["item_name"] or "").lower(),
+        2: lambda r: (r["unit_of_measure"] or "").lower(),
+        3: lambda r: r["total_lifespan_months"] or 0,
+        4: lambda r: r["don_gia"] or 0,
+        5: lambda r: r["h1"],
+        6: lambda r: r["h2"],
+        7: lambda r: r["h3"],
+        8: lambda r: r["h4"],
+        9: lambda r: r["total"],
+    }
+    _SORT_KEYS_SEARCH: dict = {
+        1: lambda r: (r["wh_name"] or "").lower(),
+        2: lambda r: (r["item_name"] or "").lower(),
+        3: lambda r: (r["unit_of_measure"] or "").lower(),
+        4: lambda r: r["total_lifespan_months"] or 0,
+        5: lambda r: r["don_gia"] or 0,
+        6: lambda r: r["h1"],
+        7: lambda r: r["h2"],
+        8: lambda r: r["h3"],
+        9: lambda r: r["h4"],
+        10: lambda r: r["total"],
+    }
+
     def __init__(self):
         super().__init__()
         self.setStyleSheet("ThongKeKhoPage { background: #fafafa; }")
@@ -1021,6 +1277,10 @@ class ThongKeKhoPage(QWidget):
         self._search_year_map: dict = {}
         self._was_searching: bool = False
         self._tab_btns: dict[int, QPushButton] = {}
+        self._sort_col = -1
+        self._sort_asc = True
+        self._sort_s_col = -1
+        self._sort_s_asc = True
         self._build_ui()
 
     def _build_ui(self):
@@ -1083,6 +1343,9 @@ class ThongKeKhoPage(QWidget):
                 padding: 0 12px; background: white; color: #111; }
             QLineEdit:focus { border-color: #bbb; }
         """
+        self._vis_btn = _ColVisBtn()
+        card_h.addWidget(self._vis_btn)
+
         self._local_search = QLineEdit()
         self._local_search.setPlaceholderText("Tìm trong kho này...")
         self._local_search.setFixedSize(220, 34)
@@ -1102,7 +1365,9 @@ class ThongKeKhoPage(QWidget):
         tbl_v = QVBoxLayout(tbl_card)
         tbl_v.setContentsMargins(0, 0, 0, 0)
 
+        self._smart_hdr = _SmartHeader({0})
         self._table = QTableWidget(0, len(self._COLS))
+        self._table.setHorizontalHeader(self._smart_hdr)
         self._table.setHorizontalHeaderLabels(self._COLS)
         self._table.verticalHeader().setVisible(False)
         self._table.setShowGrid(False)
@@ -1114,6 +1379,8 @@ class ThongKeKhoPage(QWidget):
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setStyleSheet(_TABLE_STYLE)
         self._table.cellDoubleClicked.connect(self._on_cell_dblclick)
+        self._smart_hdr.sortRequested.connect(self._on_sort)
+        self._smart_hdr.visToggled.connect(self._vis_btn.on_vis_toggled)
 
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
@@ -1164,6 +1431,8 @@ class ThongKeKhoPage(QWidget):
         cols = self._COLS_SEARCH if search_mode else self._COLS
         self._table.setColumnCount(len(cols))
         self._table.setHorizontalHeaderLabels(cols)
+        for i in range(len(cols)):
+            self._table.setColumnHidden(i, False)
         h = self._table.horizontalHeader()
         specs = (
             [
@@ -1195,6 +1464,16 @@ class ThongKeKhoPage(QWidget):
             h.setSectionResizeMode(i, mode)
             if w:
                 self._table.setColumnWidth(i, w)
+        skip = {0}
+        self._smart_hdr.set_skip(skip)
+        self._vis_btn.bind(self._table, self._smart_hdr, cols, skip)
+        if search_mode:
+            self._sort_s_col = -1
+            self._sort_s_asc = True
+        else:
+            self._sort_col = -1
+            self._sort_asc = True
+        self._smart_hdr.reset_sort()
 
     # ── Data ──────────────────────────────────────────────────────────────────
 
@@ -1384,6 +1663,7 @@ class ThongKeKhoPage(QWidget):
         self._load_table(rows, search_mode=False)
 
     def _load_table(self, rows, search_mode: bool = False):
+        rows = self._sort_rows(rows, search_mode)
         self._table.setRowCount(0)
         for i, r in enumerate(rows):
             ri = self._table.rowCount()
@@ -1476,6 +1756,31 @@ class ThongKeKhoPage(QWidget):
                     item.setData(Qt.ItemDataRole.UserRole,
                                  (wh_id, r["item_type_id"], ql, r["item_name"]))
 
+    def _sort_rows(self, rows, search_mode: bool):
+        col = self._sort_s_col if search_mode else self._sort_col
+        asc = self._sort_s_asc if search_mode else self._sort_asc
+        if col <= 0:
+            return rows
+        keys = self._SORT_KEYS_SEARCH if search_mode else self._SORT_KEYS_NORMAL
+        fn = keys.get(col)
+        if fn is None:
+            return rows
+        return sorted(rows, key=fn, reverse=not asc)
+
+    def _on_sort(self, logical: int, ascending: bool):
+        if self._was_searching:
+            self._sort_s_col = logical
+            self._sort_s_asc = ascending
+            q = self._search.text().strip().lower()
+            rows = [r for r in self._search_raw
+                    if q in r["item_name"].lower()
+                    or q in r["wh_name"].lower() or q in r["wh_code"].lower()]
+            self._load_table(rows, search_mode=True)
+        else:
+            self._sort_col = logical
+            self._sort_asc = ascending
+            self._apply_local_filter()
+
     def _on_cell_dblclick(self, row: int, col: int):
         item = self._table.item(row, col)
         if item is None:
@@ -1505,6 +1810,30 @@ class ThongKeDonViPage(QWidget):
     _COLS_SEARCH = ["STT", "Đơn Vị", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
                     "H1", "H2", "H3", "H4", "Tổng"]
 
+    _SORT_KEYS_NORMAL: dict = {
+        1: lambda r: (r["item_name"] or "").lower(),
+        2: lambda r: (r["unit_of_measure"] or "").lower(),
+        3: lambda r: r["max_months"] or 0,
+        4: lambda r: (r["total_lifespan_months"] or 0) - (r["max_months"] or 0),
+        5: lambda r: r["h1"],
+        6: lambda r: r["h2"],
+        7: lambda r: r["h3"],
+        8: lambda r: r["h4"],
+        9: lambda r: r["total"],
+    }
+    _SORT_KEYS_SEARCH: dict = {
+        1: lambda r: (r["wh_code"] or "").lower(),
+        2: lambda r: (r["item_name"] or "").lower(),
+        3: lambda r: (r["unit_of_measure"] or "").lower(),
+        4: lambda r: r["max_months"] or 0,
+        5: lambda r: (r["total_lifespan_months"] or 0) - (r["max_months"] or 0),
+        6: lambda r: r["h1"],
+        7: lambda r: r["h2"],
+        8: lambda r: r["h3"],
+        9: lambda r: r["h4"],
+        10: lambda r: r["total"],
+    }
+
     def __init__(self):
         super().__init__()
         self.setStyleSheet("ThongKeDonViPage { background: #fafafa; }")
@@ -1515,6 +1844,10 @@ class ThongKeDonViPage(QWidget):
         self._search_raw: list = []
         self._search_year_map: dict = {}
         self._was_searching: bool = False
+        self._sort_col = -1
+        self._sort_asc = True
+        self._sort_s_col = -1
+        self._sort_s_asc = True
         self._build_ui()
 
     def _build_ui(self):
@@ -1590,6 +1923,9 @@ class ThongKeDonViPage(QWidget):
             card_h.addWidget(c)
         card_h.addStretch()
 
+        self._vis_btn = _ColVisBtn()
+        card_h.addWidget(self._vis_btn)
+
         self._local_search = QLineEdit()
         self._local_search.setPlaceholderText("Tìm trong đơn vị này...")
         self._local_search.setFixedSize(220, 34)
@@ -1612,7 +1948,9 @@ class ThongKeDonViPage(QWidget):
         tbl_v = QVBoxLayout(tbl_card)
         tbl_v.setContentsMargins(0, 0, 0, 0)
 
+        self._smart_hdr = _SmartHeader({0})
         self._table = QTableWidget(0, len(self._COLS))
+        self._table.setHorizontalHeader(self._smart_hdr)
         self._table.setHorizontalHeaderLabels(self._COLS)
         self._table.verticalHeader().setVisible(False)
         self._table.setShowGrid(False)
@@ -1624,6 +1962,8 @@ class ThongKeDonViPage(QWidget):
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setStyleSheet(_TABLE_STYLE)
         self._table.cellDoubleClicked.connect(self._on_cell_dblclick)
+        self._smart_hdr.sortRequested.connect(self._on_sort)
+        self._smart_hdr.visToggled.connect(self._vis_btn.on_vis_toggled)
 
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
@@ -1657,6 +1997,8 @@ class ThongKeDonViPage(QWidget):
         cols = self._COLS_SEARCH if search_mode else self._COLS
         self._table.setColumnCount(len(cols))
         self._table.setHorizontalHeaderLabels(cols)
+        for i in range(len(cols)):
+            self._table.setColumnHidden(i, False)
         h = self._table.horizontalHeader()
         specs = (
             [
@@ -1688,6 +2030,16 @@ class ThongKeDonViPage(QWidget):
             h.setSectionResizeMode(i, mode)
             if w:
                 self._table.setColumnWidth(i, w)
+        skip = {0}
+        self._smart_hdr.set_skip(skip)
+        self._vis_btn.bind(self._table, self._smart_hdr, cols, skip)
+        if search_mode:
+            self._sort_s_col = -1
+            self._sort_s_asc = True
+        else:
+            self._sort_col = -1
+            self._sort_asc = True
+        self._smart_hdr.reset_sort()
 
     # ── Data ──────────────────────────────────────────────────────────────────
 
@@ -1883,6 +2235,7 @@ class ThongKeDonViPage(QWidget):
         return f"{y} năm" if y > 0 else f"{mm} tháng"
 
     def _load_table(self, rows, search_mode: bool = False):
+        rows = self._sort_rows(rows, search_mode)
         self._table.setRowCount(0)
         _orange = QColor(204, 102, 0)
 
@@ -2019,3 +2372,28 @@ class ThongKeDonViPage(QWidget):
             return
         _apply_inv_qty(wh_id, item_type_id, ql, new_val)
         self.refresh()
+
+    def _sort_rows(self, rows, search_mode: bool):
+        col = self._sort_s_col if search_mode else self._sort_col
+        asc = self._sort_s_asc if search_mode else self._sort_asc
+        if col <= 0:
+            return rows
+        keys = self._SORT_KEYS_SEARCH if search_mode else self._SORT_KEYS_NORMAL
+        fn = keys.get(col)
+        if fn is None:
+            return rows
+        return sorted(rows, key=fn, reverse=not asc)
+
+    def _on_sort(self, logical: int, ascending: bool):
+        if self._was_searching:
+            self._sort_s_col = logical
+            self._sort_s_asc = ascending
+            q = self._search.text().strip().lower()
+            rows = [r for r in self._search_raw
+                    if q in r["item_name"].lower()
+                    or q in r["wh_name"].lower() or q in r["wh_code"].lower()]
+            self._load_table(rows, search_mode=True)
+        else:
+            self._sort_col = logical
+            self._sort_asc = ascending
+            self._apply_local_filter()

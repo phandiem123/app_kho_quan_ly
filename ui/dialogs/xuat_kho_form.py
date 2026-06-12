@@ -281,6 +281,9 @@ class XuatKhoFormDialog(QDialog):
         show_quality = (self._subtype == "to_unit")
         self._show_price = show_price
         self._show_quality = show_quality
+        self._shared_dest = "unit"
+        self._btn_unit_dest = self._btn_event_dest = None
+        self._lbl_unit_dest = self._lbl_event_dest = None
 
         title = _TITLES[self._subtype]
         if issue:
@@ -332,6 +335,7 @@ class XuatKhoFormDialog(QDialog):
         self.f_to_wh = combo_wh(self._don_vi)
         self.f_person = fld("Tên đơn vị / người nhận")
         self.f_transport = fld("Phương tiện / đơn vị vận chuyển")
+        self.f_event_name = fld("Tên sự kiện / đơn vị nhận")
 
         today = QDate.currentDate()
         self.f_date = QLineEdit(today.toString("dd/MM/yyyy"))
@@ -365,7 +369,29 @@ class XuatKhoFormDialog(QDialog):
             col_b.addRow(lbl("Đơn Vị Nhận"), self.f_to_wh)
             col_b.addRow(lbl("Người Nhận"), self.f_person)
         else:
-            col_b.addRow(lbl("Đơn Vị Mượn"), self.f_to_wh)
+            tgl_w = QWidget()
+            tgl_w.setFixedHeight(32)
+            tgl_w.setStyleSheet("background: #f0f0f0; border-radius: 8px;")
+            tgl_h = QHBoxLayout(tgl_w)
+            tgl_h.setContentsMargins(3, 3, 3, 3)
+            tgl_h.setSpacing(2)
+            self._btn_unit_dest = QPushButton("Đơn Vị Mượn")
+            self._btn_event_dest = QPushButton("Sự Kiện")
+            for _b in (self._btn_unit_dest, self._btn_event_dest):
+                _b.setFont(QFont(FONT, 11))
+                _b.setFixedHeight(26)
+                _b.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                tgl_h.addWidget(_b)
+            self._btn_unit_dest.clicked.connect(lambda: self._set_shared_dest("unit"))
+            self._btn_event_dest.clicked.connect(lambda: self._set_shared_dest("event"))
+            col_b.addRow(lbl("Xuất Đến *"), tgl_w)
+            self._lbl_unit_dest = lbl("Đơn Vị Mượn")
+            self._lbl_event_dest = lbl("Tên Sự Kiện")
+            col_b.addRow(self._lbl_unit_dest, self.f_to_wh)
+            col_b.addRow(self._lbl_event_dest, self.f_event_name)
+            self.f_event_name.setVisible(False)
+            self._lbl_event_dest.setVisible(False)
+            self._update_dest_toggle_style()
             col_b.addRow(lbl("Người Mượn"), self.f_person)
 
         col_c = QFormLayout()
@@ -373,8 +399,7 @@ class XuatKhoFormDialog(QDialog):
         col_c.setSpacing(10)
         date_lbl = "Ngày Xuất *" if self._subtype == "to_unit" else "Ngày Mượn *"
         col_c.addRow(lbl(date_lbl), self.f_date)
-        if self._subtype == "to_unit":
-            col_c.addRow(lbl("Vận Chuyển"), self.f_transport)
+        col_c.addRow(lbl("Vận Chuyển"), self.f_transport)
 
         row1.addLayout(col_a, 1)
         row1.addLayout(col_b, 1)
@@ -479,6 +504,17 @@ class XuatKhoFormDialog(QDialog):
             QPushButton:hover { background: #f5f5f5; }
         """)
         btn_cancel.clicked.connect(self.reject)
+        if self._subtype == "shared_loan":
+            btn_export_phieu = QPushButton("Xuất Phiếu Dùng Chung")
+            btn_export_phieu.setFixedHeight(36)
+            btn_export_phieu.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+            btn_export_phieu.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_export_phieu.setStyleSheet("""
+                QPushButton { border: none; border-radius: 6px;
+                    padding: 0 20px; background: #2563eb; color: white; }
+                QPushButton:hover { background: #1d4ed8; }
+            """)
+            btn_export_phieu.clicked.connect(self._on_export_voucher)
         btn_save = QPushButton("Lưu")
         btn_save.setFixedHeight(36)
         btn_save.setFont(QFont(FONT, 12, QFont.Weight.Bold))
@@ -490,6 +526,9 @@ class XuatKhoFormDialog(QDialog):
         btn_save.clicked.connect(self._save)
         btn_row.addWidget(btn_cancel)
         btn_row.addSpacing(8)
+        if self._subtype == "shared_loan":
+            btn_row.addWidget(btn_export_phieu)
+            btn_row.addSpacing(8)
         btn_row.addWidget(btn_save)
         root.addLayout(btn_row)
 
@@ -613,10 +652,18 @@ class XuatKhoFormDialog(QDialog):
         self.f_ref.setText(issue.reference_number)
         _set_combo_by_data(self.f_from_wh, issue.from_warehouse_id)
         self._reload_stock_map()
-        _set_combo_by_data(self.f_to_wh, issue.to_warehouse_id)
-        self.f_person.setText(issue.created_by)
+        self.f_transport.setText(issue.transporter)
         if self._subtype == "to_unit":
-            self.f_transport.setText(issue.transporter)
+            _set_combo_by_data(self.f_to_wh, issue.to_warehouse_id)
+            self.f_person.setText(issue.created_by)
+        else:
+            if issue.to_warehouse_id:
+                self._set_shared_dest("unit")
+                _set_combo_by_data(self.f_to_wh, issue.to_warehouse_id)
+            else:
+                self._set_shared_dest("event")
+                self.f_event_name.setText(issue.recipient)
+            self.f_person.setText(issue.created_by)
         d = QDate.fromString(issue.transaction_date, "yyyy-MM-dd")
         if d.isValid():
             self.f_date.setText(d.toString("dd/MM/yyyy"))
@@ -624,19 +671,64 @@ class XuatKhoFormDialog(QDialog):
         for line in get_lines(issue.id):
             self._add_line(line)
 
+    # ── Shared dest toggle ────────────────────────────────────────────────────
+
+    def _update_dest_toggle_style(self):
+        if not self._btn_unit_dest:
+            return
+        active = (
+            "QPushButton { border: none; border-radius: 6px; padding: 0 12px;"
+            " background: #111; color: white; font-size: 11px; font-weight: 600; }"
+        )
+        inactive = (
+            "QPushButton { border: none; border-radius: 6px; padding: 0 12px;"
+            " background: transparent; color: #111; font-size: 11px; }"
+            " QPushButton:hover { background: #e3e3e3; }"
+        )
+        self._btn_unit_dest.setStyleSheet(
+            active if self._shared_dest == "unit" else inactive
+        )
+        self._btn_event_dest.setStyleSheet(
+            active if self._shared_dest == "event" else inactive
+        )
+
+    def _set_shared_dest(self, dest_type: str):
+        self._shared_dest = dest_type
+        is_unit = dest_type == "unit"
+        if self._lbl_unit_dest:
+            self._lbl_unit_dest.setVisible(is_unit)
+            self.f_to_wh.setVisible(is_unit)
+        if self._lbl_event_dest:
+            self._lbl_event_dest.setVisible(not is_unit)
+            self.f_event_name.setVisible(not is_unit)
+        self._update_dest_toggle_style()
+
     # ── Save ──────────────────────────────────────────────────────────────────
 
-    def _save(self):
+    def _build_issue(self) -> "Issue | None":
         ref = self.f_ref.text().strip()
         if not ref:
-            return self._err("Vui lòng nhập Số Phiếu.")
+            self._err("Vui lòng nhập Số Phiếu.")
+            return None
         _d = QDate.fromString(self.f_date.text(), "dd/MM/yyyy")
         if not _d.isValid():
-            return self._err("Ngày không hợp lệ. Vui lòng nhập đúng định dạng dd/MM/yyyy.")
+            self._err("Ngày không hợp lệ. Vui lòng nhập đúng định dạng dd/MM/yyyy.")
+            return None
         from_wh_id = self.f_from_wh.currentData()
         if not from_wh_id:
-            return self._err("Vui lòng chọn Kho Xuất.")
-        to_wh_id = self.f_to_wh.currentData()
+            self._err("Vui lòng chọn Kho Xuất.")
+            return None
+
+        if self._subtype == "shared_loan":
+            if self._shared_dest == "unit":
+                to_wh_id = self.f_to_wh.currentData()
+                recipient = ""
+            else:
+                to_wh_id = None
+                recipient = self.f_event_name.text().strip()
+        else:
+            to_wh_id = self.f_to_wh.currentData()
+            recipient = self.f_person.text().strip()
 
         lines: list[IssueLine] = []
         for i in range(self._rows_layout.count()):
@@ -646,9 +738,9 @@ class XuatKhoFormDialog(QDialog):
                 if d:
                     lines.append(d)
         if not lines:
-            return self._err("Vui lòng thêm ít nhất một mặt hàng.")
+            self._err("Vui lòng thêm ít nhất một mặt hàng.")
+            return None
 
-        # Stock validation (new issues only; edits assume update() re-balances inventory)
         if not self._editing:
             self._reload_stock_map()
             for line in lines:
@@ -658,16 +750,18 @@ class XuatKhoFormDialog(QDialog):
                     available = self._stock_map.get(line.item_type_id, 0)
                 if line.quantity > available:
                     ql_info = f" ({line.quality_level})" if self._show_quality else ""
-                    return self._err(
+                    self._err(
                         f"'{line.item_name}'{ql_info} không đủ tồn kho.\n"
                         f"Tồn: {available}  –  Xuất: {line.quantity}"
                     )
+                    return None
 
         exclude = self._editing.id if self._editing else None
         if ref_exists(ref, exclude):
-            return self._err(f"Số Phiếu '{ref}' đã tồn tại.")
+            self._err(f"Số Phiếu '{ref}' đã tồn tại.")
+            return None
 
-        issue = Issue(
+        return Issue(
             id=self._editing.id if self._editing else None,
             reference_number=ref,
             from_warehouse_id=from_wh_id,
@@ -676,18 +770,96 @@ class XuatKhoFormDialog(QDialog):
             to_warehouse_name="",
             transaction_date=_d.toString("yyyy-MM-dd"),
             tx_type="XUAT_KHO" if self._subtype == "to_unit" else "MUON",
-            recipient=self.f_person.text().strip(),
+            recipient=recipient,
             created_by=self.f_person.text().strip(),
-            transporter=self.f_transport.text().strip() if self._subtype == "to_unit" else "",
+            transporter=self.f_transport.text().strip(),
             notes=self.f_notes.toPlainText().strip(),
             lines=lines,
         )
 
+    def _save(self):
+        issue = self._build_issue()
+        if issue is None:
+            return
         if self._editing:
             update(issue)
         else:
             insert(issue)
         self.accept()
+
+    def _on_export_voucher(self):
+        issue = self._build_issue()
+        if issue is None:
+            return
+        if self._editing:
+            update(issue)
+            tx_id = self._editing.id
+        else:
+            tx_id = insert(issue)
+        self._export_phieu_xlsx(tx_id)
+        self.accept()
+
+    def _export_phieu_xlsx(self, tx_id: int):
+        try:
+            import openpyxl
+        except ImportError:
+            QMessageBox.warning(self, "Thiếu thư viện",
+                                "Cần cài openpyxl: pip install openpyxl")
+            return
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu Phiếu Xuất Dùng Chung", "phieu_xuat_dung_chung.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            conn = database.get_conn()
+            tx = conn.execute("""
+                SELECT t.reference_number, t.transaction_date, t.supplier AS recipient,
+                       t.created_by, t.transporter, t.notes,
+                       wf.name AS from_wh_name, wt.name AS to_wh_name
+                FROM transactions t
+                LEFT JOIN warehouses wf ON wf.id = t.from_warehouse_id
+                LEFT JOIN warehouses wt ON wt.id = t.to_warehouse_id
+                WHERE t.id = ?
+            """, (tx_id,)).fetchone()
+            item_lines = conn.execute("""
+                SELECT it.name AS item_name, it.unit_of_measure,
+                       tl.quantity, tl.notes
+                FROM transaction_lines tl
+                JOIN item_types it ON it.id = tl.item_type_id
+                WHERE tl.transaction_id = ?
+                ORDER BY tl.id
+            """, (tx_id,)).fetchall()
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Phiếu Xuất Dùng Chung"
+            ws.append(["PHIẾU XUẤT HÀNG DÙNG CHUNG"])
+            ws.append([])
+            ws.append(["Số Phiếu:", tx["reference_number"] or "", "",
+                        "Ngày:", tx["transaction_date"] or ""])
+            ws.append(["Kho Xuất:", tx["from_wh_name"] or "", "",
+                        "Vận Chuyển:", tx["transporter"] or ""])
+            borrower = tx["to_wh_name"] or tx["recipient"] or ""
+            ws.append(["Đơn Vị / Sự Kiện:", borrower, "",
+                        "Người Mượn:", tx["created_by"] or ""])
+            if tx["notes"]:
+                ws.append(["Nội Dung:", tx["notes"]])
+            ws.append([])
+            ws.append(["STT", "Tên Hàng", "ĐVT", "Số Lượng", "Ghi Chú"])
+            for i, ln in enumerate(item_lines, 1):
+                ws.append([i, ln["item_name"], ln["unit_of_measure"],
+                            ln["quantity"], ln["notes"] or ""])
+
+            for col in ws.columns:
+                max_len = max((len(str(c.value)) for c in col if c.value), default=8)
+                ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 50)
+
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã lưu phiếu.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
 
     def _err(self, msg: str):
         QMessageBox.warning(self, "Lỗi", msg)
