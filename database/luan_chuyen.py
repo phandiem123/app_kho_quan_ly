@@ -31,6 +31,8 @@ class Transfer:
     transaction_date: str
     tx_type: str = "LUAN_CHUYEN_KHO"
     created_by: str = ""
+    transporter: str = ""
+    deliverer: str = ""
     notes: str = ""
     line_count: int = 0
     lines: list[TransferLine] = field(default_factory=list)
@@ -53,7 +55,7 @@ def get_all(year: int | None = None, subtype: str = "kho_kho") -> list[Transfer]
         SELECT t.id, t.type AS tx_type, t.reference_number,
                t.from_warehouse_id, wfrom.name AS from_warehouse_name,
                t.to_warehouse_id,   wto.name   AS to_warehouse_name,
-               t.transaction_date, t.created_by, t.notes,
+               t.transaction_date, t.created_by, t.transporter, t.supplier AS deliverer, t.notes,
                COUNT(tl.id) AS line_count
         FROM transactions t
         LEFT JOIN warehouses wfrom ON wfrom.id = t.from_warehouse_id
@@ -74,6 +76,8 @@ def get_all(year: int | None = None, subtype: str = "kho_kho") -> list[Transfer]
             to_warehouse_name=r["to_warehouse_name"] or "",
             transaction_date=r["transaction_date"] or "",
             created_by=r["created_by"] or "",
+            transporter=r["transporter"] or "",
+            deliverer=r["deliverer"] or "",
             notes=r["notes"] or "",
             line_count=r["line_count"] or 0,
         )
@@ -213,11 +217,12 @@ def insert(transfer: Transfer) -> int:
     cur = conn.execute("""
         INSERT INTO transactions
             (type, reference_number, from_warehouse_id, to_warehouse_id,
-             transaction_date, created_by, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+             transaction_date, created_by, transporter, supplier, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (_TX[transfer.subtype], transfer.reference_number,
           transfer.from_warehouse_id, transfer.to_warehouse_id,
-          transfer.transaction_date, transfer.created_by, transfer.notes))
+          transfer.transaction_date, transfer.created_by,
+          transfer.transporter, transfer.deliverer, transfer.notes))
     tx_id = cur.lastrowid
 
     for line in transfer.lines:
@@ -255,11 +260,12 @@ def update(transfer: Transfer) -> None:
     conn.execute("""
         UPDATE transactions SET
             type=?, reference_number=?, from_warehouse_id=?, to_warehouse_id=?,
-            transaction_date=?, created_by=?, notes=?
+            transaction_date=?, created_by=?, transporter=?, supplier=?, notes=?
         WHERE id=?
     """, (_TX[transfer.subtype], transfer.reference_number,
           transfer.from_warehouse_id, transfer.to_warehouse_id,
-          transfer.transaction_date, transfer.created_by, transfer.notes, transfer.id))
+          transfer.transaction_date, transfer.created_by,
+          transfer.transporter, transfer.deliverer, transfer.notes, transfer.id))
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (transfer.id,))
 
     for line in transfer.lines:

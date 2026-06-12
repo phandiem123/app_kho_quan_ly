@@ -5,7 +5,7 @@ import datetime
 import database
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QSizePolicy,
-    QComboBox, QScrollArea, QLineEdit,
+    QComboBox, QScrollArea, QLineEdit, QToolTip,
 )
 from PyQt6.QtCore import Qt, QRect, QRectF
 from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush, QPainterPath
@@ -25,8 +25,10 @@ _BAR_PALETTE = [
     "#4cc9f0", "#560bad", "#06d6a0", "#e63946",
     "#ffd166", "#118ab2", "#ef476f", "#073b4c",
 ]
-_NHAP_COLOR = "#2563eb"
-_XUAT_COLOR = "#f59e0b"
+_NHAP_COLOR   = "#2563eb"
+_XUAT_COLOR   = "#f59e0b"
+_PARETO_BAR   = "#4361ee"
+_PARETO_LINE  = "#e53935"
 
 _COMBO_STYLE = """
     QComboBox {
@@ -703,6 +705,440 @@ class _HBarChart(QWidget):
                              f"{value:,}")
 
 
+# ── Heatmap Grid ─────────────────────────────────────────────────────────────
+class _HeatmapGrid(QWidget):
+    """Y = items, X = H1/H2/H3/H4; cell color intensity proportional to quantity."""
+
+    HEADER_H = 34
+    ROW_H    = 28
+    NAME_W   = 200
+    CELL_W   = 88
+    PAD_L    = 10
+
+    _PALETTES = {
+        "H1": ("#e8f5e9", "#1b5e20"),
+        "H2": ("#e3f2fd", "#0d47a1"),
+        "H3": ("#fff3e0", "#bf360c"),
+        "H4": ("#ffebee", "#b71c1c"),
+    }
+    _LEVELS = ["H1", "H2", "H3", "H4"]
+
+    def __init__(self):
+        super().__init__()
+        self._items: list[tuple] = []   # (code, name, h1, h2, h3, h4)
+        self._col_max: list[int] = [1, 1, 1, 1]
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+    def load(self, items: list[tuple]):
+        self._items = items
+        self._col_max = [
+            max((row[2 + j] for row in items), default=0) or 1
+            for j in range(4)
+        ]
+        self.setMinimumHeight(self.HEADER_H + len(items) * self.ROW_H)
+        self.update()
+
+    def _cell_color(self, col: int, value: int) -> QColor:
+        if value == 0:
+            return QColor("#f2f2f2")
+        light_hex, dark_hex = self._PALETTES[self._LEVELS[col]]
+        t = min(1.0, value / self._col_max[col]) ** 0.6
+        l, d = QColor(light_hex), QColor(dark_hex)
+        return QColor(
+            int(l.red()   + t * (d.red()   - l.red())),
+            int(l.green() + t * (d.green() - l.green())),
+            int(l.blue()  + t * (d.blue()  - l.blue())),
+        )
+
+    def _hit(self, x, y):
+        row = (y - self.HEADER_H) // self.ROW_H
+        col = (x - self.PAD_L - self.NAME_W) // self.CELL_W
+        if 0 <= row < len(self._items) and 0 <= col < 4:
+            item = self._items[row]
+            return item[1], self._LEVELS[col], item[2 + col]
+        return None
+
+    def mouseMoveEvent(self, event):
+        info = self._hit(event.pos().x(), event.pos().y())
+        if info:
+            name, level, value = info
+            tip = f"{name}\n{level}: {value:,}" if value else f"{name}\n{level}: —"
+            QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+        else:
+            QToolTip.hideText()
+        super().mouseMoveEvent(event)
+
+    def paintEvent(self, _):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W = self.width()
+        x_div = self.PAD_L + self.NAME_W
+
+        if not self._items:
+            painter.setPen(QPen(QColor("#aaa")))
+            painter.setFont(QFont(FONT, 12))
+            painter.drawText(QRect(0, 0, W, 120),
+                             Qt.AlignmentFlag.AlignCenter, "Không có dữ liệu")
+            return
+
+        # Header row
+        painter.fillRect(QRect(0, 0, W, self.HEADER_H), QColor("#f5f5f5"))
+        painter.setPen(QPen(QColor("#ddd"), 1))
+        painter.drawLine(0, self.HEADER_H - 1, W, self.HEADER_H - 1)
+        painter.setFont(QFont(FONT, 9, QFont.Weight.Bold))
+        painter.setPen(QPen(QColor("#555")))
+        painter.drawText(QRect(self.PAD_L, 0, self.NAME_W - 4, self.HEADER_H),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         "Mặt Hàng")
+        for j, level in enumerate(self._LEVELS):
+            cx = x_div + j * self.CELL_W
+            _, dark_hex = self._PALETTES[level]
+            painter.setPen(QPen(QColor(dark_hex)))
+            painter.setFont(QFont(FONT, 10, QFont.Weight.Bold))
+            painter.drawText(QRect(cx, 0, self.CELL_W, self.HEADER_H),
+                             Qt.AlignmentFlag.AlignCenter, level)
+
+        # Vertical divider after name column
+        painter.setPen(QPen(QColor("#ddd"), 1))
+        painter.drawLine(x_div, 0, x_div, self.height())
+
+        # Data rows
+        for i, (code, name, h1, h2, h3, h4) in enumerate(self._items):
+            y = self.HEADER_H + i * self.ROW_H
+            vals = [h1, h2, h3, h4]
+
+            # Alternating row background for name column
+            painter.fillRect(
+                QRect(0, y, x_div, self.ROW_H),
+                QColor("#fafafa") if i % 2 == 0 else QColor("white"),
+            )
+
+            # Item name
+            short = name if len(name) <= 24 else name[:23] + "…"
+            painter.setPen(QPen(QColor("#333")))
+            painter.setFont(QFont(FONT, 9))
+            painter.drawText(QRect(self.PAD_L, y, self.NAME_W - 6, self.ROW_H),
+                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                             short)
+
+            # Heat cells
+            for j, val in enumerate(vals):
+                cx = x_div + j * self.CELL_W
+                painter.fillRect(
+                    QRect(cx + 1, y + 1, self.CELL_W - 2, self.ROW_H - 2),
+                    self._cell_color(j, val),
+                )
+                if val > 0:
+                    t = val / self._col_max[j]
+                    painter.setPen(QPen(QColor("white") if t > 0.45 else QColor("#333")))
+                    painter.setFont(QFont(FONT, 9))
+                    painter.drawText(QRect(cx, y, self.CELL_W, self.ROW_H),
+                                     Qt.AlignmentFlag.AlignCenter, f"{val:,}")
+
+            # Row separator
+            painter.setPen(QPen(QColor("#eeeeee"), 1))
+            painter.drawLine(0, y + self.ROW_H, W, y + self.ROW_H)
+
+        # Vertical separators between quality columns
+        painter.setPen(QPen(QColor("#e0e0e0"), 1))
+        for j in range(1, 4):
+            x = x_div + j * self.CELL_W
+            painter.drawLine(x, 0, x, self.height())
+
+
+# ── Donut Chart (H4 tại các đơn vị) ──────────────────────────────────────────
+_DONUT_PALETTE = [
+    "#4361ee", "#f72585", "#06d6a0", "#e63946", "#ffd166",
+    "#7209b7", "#118ab2", "#ef476f", "#2ec4b6", "#e9c46a",
+    "#264653", "#2a9d8f", "#e76f51", "#a8dadc", "#457b9d",
+    "#6a4c93", "#c77dff", "#48cae4", "#ff9f1c", "#f4a261",
+]
+
+
+class _DonutChart(QWidget):
+    """Donut chart with outward callout lines — H4 distribution across units."""
+
+    def __init__(self, height: int = 340):
+        super().__init__()
+        self._labels: list[str] = []
+        self._values: list[int] = []
+        self._colors: list[str] = []
+        self.setFixedHeight(height)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def load(self, labels: list[str], values: list[int], colors: list[str] | None = None):
+        self._labels = labels
+        self._values = values
+        self._colors = colors or [_DONUT_PALETTE[i % len(_DONUT_PALETTE)]
+                                   for i in range(len(labels))]
+        self.update()
+
+    def _geom(self):
+        W, H = self.width(), self.height()
+        size = min(W - 280, H - 20)
+        size = max(size, 60)
+        R  = size // 2
+        ri = int(R * 0.52)
+        return W // 2, H // 2, R, ri
+
+    def _hit_segment(self, pos) -> int | None:
+        total = sum(self._values) or 1
+        cx, cy, R, ri = self._geom()
+        dx, dy = pos.x() - cx, pos.y() - cy
+        dist = math.sqrt(dx * dx + dy * dy)
+        if not (ri < dist <= R + 4):
+            return None
+        norm = (90 - math.degrees(math.atan2(-dy, dx))) % 360
+        start = 0.0
+        for i, value in enumerate(self._values):
+            span = 360.0 * value / total
+            if start <= norm < start + span:
+                return i
+            start += span
+        return None
+
+    def mouseMoveEvent(self, event):
+        idx = self._hit_segment(event.pos())
+        if idx is not None:
+            name   = self._labels[idx]
+            value  = self._values[idx]
+            total  = sum(self._values) or 1
+            QToolTip.showText(
+                event.globalPosition().toPoint(),
+                f"{name}\n{value:,}  ({100 * value / total:.1f}%)",
+                self,
+            )
+        else:
+            QToolTip.hideText()
+        super().mouseMoveEvent(event)
+
+    def paintEvent(self, _):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W, H = self.width(), self.height()
+
+        if not self._labels:
+            painter.setPen(QPen(QColor("#aaa")))
+            painter.setFont(QFont(FONT, 12))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Không có dữ liệu")
+            return
+
+        total = sum(self._values) or 1
+        cx, cy, R, ri = self._geom()
+        ARM     = 20    # radial arm length (px)
+        ELBOW   = 16    # horizontal elbow (px)
+        MIN_DEG = 5     # skip callout for segments < 5°
+
+        # ── Segments ─────────────────────────────────────────────────────────
+        qt_start = 90 * 16
+        segs: list[tuple] = []
+        for label, value, color in zip(self._labels, self._values, self._colors):
+            span = int(360 * 16 * value / total)
+            if span == 0:
+                continue
+            painter.setBrush(QBrush(QColor(color)))
+            painter.setPen(QPen(QColor("white"), 1.2))
+            painter.drawPie(QRect(cx - R, cy - R, 2 * R, 2 * R), qt_start, -span)
+            segs.append((qt_start - span // 2, span, label, value, color))
+            qt_start -= span
+
+        # ── Center hole ───────────────────────────────────────────────────────
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor("white")))
+        painter.drawEllipse(QRect(cx - ri, cy - ri, 2 * ri, 2 * ri))
+
+        # ── Center text ───────────────────────────────────────────────────────
+        painter.setPen(QPen(QColor("#111")))
+        painter.setFont(QFont(FONT, 14, QFont.Weight.Bold))
+        painter.drawText(QRect(cx - ri, cy - 22, 2 * ri, 26),
+                         Qt.AlignmentFlag.AlignCenter, f"{total:,}")
+        painter.setFont(QFont(FONT, 9))
+        painter.setPen(QPen(QColor("#888")))
+        painter.drawText(QRect(cx - ri, cy + 6, 2 * ri, 18),
+                         Qt.AlignmentFlag.AlignCenter, "tổng H4")
+
+        # ── Callout lines + labels ────────────────────────────────────────────
+        for mid_qt, span, label, value, color in segs:
+            if span / 16 < MIN_DEG:
+                continue
+
+            rad = math.radians(mid_qt / 16)
+            x1 = cx + R * math.cos(rad)
+            y1 = cy - R * math.sin(rad)
+            x2 = cx + (R + ARM) * math.cos(rad)
+            y2 = cy - (R + ARM) * math.sin(rad)
+            right = x2 >= cx
+            x3 = x2 + (ELBOW if right else -ELBOW)
+            y3 = y2
+
+            c = QColor(color)
+            painter.setPen(QPen(c, 1.3))
+            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+            painter.drawLine(int(x2), int(y2), int(x3), int(y3))
+
+            TW, TH = 130, 34
+            pct   = 100 * value / total
+            short = label if len(label) <= 14 else label[:13] + "…"
+            tx = int(x3) + 3 if right else int(x3) - TW - 3
+            ty = int(y3) - TH // 2
+            tx = max(2, min(W - TW - 2, tx))
+            ty = max(2, min(H - TH - 2, ty))
+
+            a = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            painter.setPen(QPen(QColor("#333")))
+            painter.setFont(QFont(FONT, 8))
+            painter.drawText(QRect(tx, ty, TW, 16), a, short)
+            painter.setPen(QPen(c))
+            painter.setFont(QFont(FONT, 8, QFont.Weight.Bold))
+            painter.drawText(QRect(tx, ty + 17, TW, 16), a,
+                             f"{value:,}  ({pct:.0f}%)")
+
+
+# ── Pareto Chart ─────────────────────────────────────────────────────────────
+class _ParetoChart(QWidget):
+    """Bars sorted desc + cumulative % line + 80% reference marker."""
+    _SLOT_W = 62
+    _PAD_L, _PAD_R, _PAD_T, _PAD_B = 56, 64, 28, 60
+
+    def __init__(self, height: int = 290):
+        super().__init__()
+        self._labels: list[str] = []
+        self._values: list[int] = []
+        self.setFixedHeight(height)
+        self.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
+
+    def load(self, labels: list[str], values: list[int]):
+        self._labels = labels
+        self._values = values
+        min_w = self._PAD_L + self._PAD_R + max(1, len(labels)) * self._SLOT_W
+        self.setMinimumWidth(max(500, min_w))
+        self.update()
+
+    def paintEvent(self, _):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if not self._labels:
+            painter.setPen(QPen(QColor("#aaa")))
+            painter.setFont(QFont(FONT, 12))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Không có dữ liệu")
+            return
+
+        PL, PR, PT, PB = self._PAD_L, self._PAD_R, self._PAD_T, self._PAD_B
+        W = self.width() - PL - PR
+        H = self.height() - PT - PB
+        total = sum(self._values) or 1
+        n = len(self._labels)
+        slot_w = max(self._SLOT_W, W // n)
+        bar_w = max(14, min(48, slot_w - 14))
+        max_v = self._values[0] if self._values else 1
+
+        # Grid + left Y-axis (count)
+        STEPS = 4
+        painter.setFont(QFont(FONT, 9))
+        for i in range(STEPS + 1):
+            gy = PT + H - int(H * i / STEPS)
+            painter.setPen(QPen(QColor("#f0f0f0"), 1))
+            painter.drawLine(PL, gy, PL + W, gy)
+            painter.setPen(QPen(QColor("#bbb")))
+            painter.drawText(QRect(0, gy - 10, PL - 4, 20),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             str(int(max_v * i / STEPS)))
+
+        # Right Y-axis (cumulative %)
+        for i in range(STEPS + 1):
+            gy = PT + H - int(H * i / STEPS)
+            painter.setPen(QPen(QColor("#aaa")))
+            painter.setFont(QFont(FONT, 9))
+            painter.drawText(QRect(PL + W + 6, gy - 10, PR - 8, 20),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             f"{i * 100 // STEPS}%")
+
+        # 80% dashed horizontal reference line
+        y80 = PT + H - int(H * 0.8)
+        painter.setPen(QPen(QColor(_PARETO_LINE), 1.5, Qt.PenStyle.DashLine))
+        painter.drawLine(PL, y80, PL + W, y80)
+        painter.setPen(QPen(QColor(_PARETO_LINE)))
+        painter.setFont(QFont(FONT, 8, QFont.Weight.Bold))
+        painter.drawText(QRect(PL + W + 6, y80 - 10, PR - 8, 20),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "80%")
+
+        # Bars + collect cumulative points
+        cum_pts: list[tuple[int, int]] = []
+        cumulative = 0
+        for i, (label, value) in enumerate(zip(self._labels, self._values)):
+            bx = PL + i * slot_w + (slot_w - bar_w) // 2
+            bar_h = int(H * value / max_v) if max_v else 0
+            by = PT + H - bar_h
+
+            if bar_h > 0:
+                r = min(5.0, bar_w / 4.0)
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(bx, by, bar_w, bar_h), r, r)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(QColor(_PARETO_BAR)))
+                painter.fillRect(QRect(bx, by + int(r) + 1, bar_w,
+                                       max(0, bar_h - int(r) - 1)), QColor(_PARETO_BAR))
+                painter.drawPath(path)
+
+            if value > 0:
+                painter.setPen(QPen(QColor("#444")))
+                painter.setFont(QFont(FONT, 8))
+                painter.drawText(QRect(bx - 10, by - 14, bar_w + 20, 12),
+                                 Qt.AlignmentFlag.AlignCenter, f"{value:,}")
+
+            cumulative += value
+            cx_pt = PL + i * slot_w + slot_w // 2
+            cy_pt = PT + H - int(H * cumulative / total)
+            cum_pts.append((cx_pt, cy_pt))
+
+            # X-axis label (rotated)
+            short = label if len(label) <= 12 else label[:11] + "…"
+            painter.setPen(QPen(QColor("#777")))
+            painter.setFont(QFont(FONT, 8))
+            painter.save()
+            painter.translate(PL + i * slot_w + slot_w // 2, PT + H + 8)
+            painter.rotate(30)
+            painter.drawText(0, 0, 130, 14, Qt.AlignmentFlag.AlignLeft, short)
+            painter.restore()
+
+        # Cumulative line
+        if len(cum_pts) >= 2:
+            painter.setPen(QPen(QColor(_PARETO_LINE), 2))
+            for i in range(1, len(cum_pts)):
+                painter.drawLine(cum_pts[i-1][0], cum_pts[i-1][1],
+                                 cum_pts[i][0], cum_pts[i][1])
+
+        # Dots + mark 80% cutoff vertical line
+        cumulative = 0
+        cutoff_drawn = False
+        for i, (px, py) in enumerate(cum_pts):
+            painter.setBrush(QBrush(QColor(_PARETO_LINE)))
+            painter.setPen(QPen(QColor("white"), 1.5))
+            painter.drawEllipse(px - 4, py - 4, 8, 8)
+            cumulative += self._values[i]
+            if not cutoff_drawn and cumulative / total >= 0.8:
+                painter.setPen(QPen(QColor(_PARETO_LINE), 1.5, Qt.PenStyle.DotLine))
+                painter.drawLine(px, PT, px, PT + H)
+                cutoff_drawn = True
+
+        # Legend
+        legend_y = self.height() - 18
+        for lx, color, lbl in [
+            (PL, _PARETO_BAR, "Số lượng mượn"),
+            (PL + 120, _PARETO_LINE, "Tích lũy (%)"),
+        ]:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(color)))
+            painter.drawRoundedRect(QRect(lx, legend_y - 5, 12, 12), 2, 2)
+            painter.setPen(QPen(QColor("#555")))
+            painter.setFont(QFont(FONT, 9))
+            painter.drawText(QRect(lx + 16, legend_y - 8, 100, 18),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, lbl)
+
+
 # ── Biểu Đồ Page ─────────────────────────────────────────────────────────────
 class BieuDoPage(QWidget):
     def __init__(self):
@@ -745,44 +1181,12 @@ class BieuDoPage(QWidget):
         pie_v.addWidget(self._pie)
         row1.addWidget(pie_frame, 5)
 
-        self._hbar = _HBarChart(max_bars=5)
-        row1.addWidget(_card("Top 5 Đơn Vị Tồn Hàng H4 Nhiều Nhất", self._hbar), 4)
+        self._hbar = _DonutChart()
+        row1.addWidget(_card("Tồn Hàng H4 Tại Các Đơn Vị", self._hbar), 5)
         root.addLayout(row1)
         root.addSpacing(20)
 
-        # ── Row 2: Stacked Bar | Line Chart (side by side) ──────────────────
-        row2 = QHBoxLayout()
-        row2.setSpacing(20)
-
-        stk_frame, stk_v = _card_frame("Tiến Trình Lão Hóa Theo Mặt Hàng")
-        stk_filter = QHBoxLayout()
-        stk_filter.setSpacing(8)
-        stk_filter.addStretch()
-
-        self._stk_search = QLineEdit()
-        self._stk_search.setPlaceholderText("Tìm mặt hàng…")
-        self._stk_search.setFixedSize(160, 28)
-        self._stk_search.setFont(QFont(FONT, 10))
-        self._stk_search.setStyleSheet(_SEARCH_STYLE)
-        self._stk_search.textChanged.connect(self._reload_stacked)
-        stk_filter.addWidget(self._stk_search)
-
-        self._stk_combo = self._make_combo(min_w=140)
-        self._stk_combo.currentIndexChanged.connect(self._reload_stacked)
-        stk_filter.addWidget(self._stk_combo)
-        stk_v.addLayout(stk_filter)
-
-        self._stacked = _StackedBarChart(height=240)
-        stk_scroll = QScrollArea()
-        stk_scroll.setWidgetResizable(True)
-        stk_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        stk_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        stk_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        stk_scroll.setFixedHeight(250)
-        stk_scroll.setWidget(self._stacked)
-        stk_v.addWidget(stk_scroll)
-        row2.addWidget(stk_frame, 1)
-
+        # ── Row 2: Line Chart – full width ──────────────────────────────────
         line_frame, line_v = _card_frame("Dự Báo Hàng Chuyển Thành H4 Theo Thời Gian")
         line_header = QHBoxLayout()
         line_header.setSpacing(8)
@@ -793,9 +1197,62 @@ class BieuDoPage(QWidget):
         line_v.addLayout(line_header)
         self._line_chart = _LineChart(height=240)
         line_v.addWidget(self._line_chart)
-        row2.addWidget(line_frame, 1)
+        root.addWidget(line_frame)
+        root.addSpacing(20)
 
-        root.addLayout(row2)
+        # ── Row 3: Pareto Chart – full width ────────────────────────────────
+        pareto_frame, pareto_v = _card_frame(
+            "Phân Tích Pareto – Mặt Hàng Mượn Nhiều Nhất (Quy Tắc 80/20)"
+        )
+        pareto_header = QHBoxLayout()
+        pareto_header.setSpacing(8)
+        pareto_header.addStretch()
+        self._pareto_combo = self._make_combo(min_w=165)
+        self._pareto_combo.currentIndexChanged.connect(self._reload_pareto)
+        pareto_header.addWidget(self._pareto_combo)
+        pareto_v.addLayout(pareto_header)
+
+        self._pareto = _ParetoChart(height=290)
+        pareto_scroll = QScrollArea()
+        pareto_scroll.setWidgetResizable(True)
+        pareto_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        pareto_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        pareto_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        pareto_scroll.setFixedHeight(300)
+        pareto_scroll.setWidget(self._pareto)
+        pareto_v.addWidget(pareto_scroll)
+        root.addWidget(pareto_frame)
+        root.addSpacing(20)
+
+        # ── Row 4: Full-Width Heatmap (toàn cảnh 200 mặt hàng) ─────────────
+        fh_frame, fh_v = _card_frame("Tổng Quan Lão Hóa Tất Cả Mặt Hàng")
+        fh_filter = QHBoxLayout()
+        fh_filter.setSpacing(8)
+        fh_filter.addStretch()
+
+        self._fhmap_search = QLineEdit()
+        self._fhmap_search.setPlaceholderText("Tìm mặt hàng…")
+        self._fhmap_search.setFixedSize(180, 28)
+        self._fhmap_search.setFont(QFont(FONT, 10))
+        self._fhmap_search.setStyleSheet(_SEARCH_STYLE)
+        self._fhmap_search.textChanged.connect(self._reload_full_heatmap)
+        fh_filter.addWidget(self._fhmap_search)
+
+        self._fhmap_combo = self._make_combo(min_w=190)
+        self._fhmap_combo.currentIndexChanged.connect(self._reload_full_heatmap)
+        fh_filter.addWidget(self._fhmap_combo)
+        fh_v.addLayout(fh_filter)
+
+        self._full_heatmap = _HeatmapGrid()
+        fhmap_scroll = QScrollArea()
+        fhmap_scroll.setWidgetResizable(True)
+        fhmap_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        fhmap_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        fhmap_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        fhmap_scroll.setFixedHeight(540)
+        fhmap_scroll.setWidget(self._full_heatmap)
+        fh_v.addWidget(fhmap_scroll)
+        root.addWidget(fh_frame)
         root.addSpacing(20)
 
         # ── Row 5: Grouped Bar (Nhập vs Xuất) – full width ─────────────────
@@ -825,7 +1282,7 @@ class BieuDoPage(QWidget):
             "SELECT id, code, name, type FROM warehouses WHERE is_active=1 ORDER BY type DESC, name"
         ).fetchall()
 
-        for combo in (self._pie_combo, self._stk_combo, self._line_combo):
+        for combo in (self._pie_combo, self._line_combo, self._pareto_combo):
             prev = combo.currentData()
             combo.blockSignals(True)
             combo.clear()
@@ -839,11 +1296,27 @@ class BieuDoPage(QWidget):
                     break
             combo.blockSignals(False)
 
+        # Full heatmap combo: includes special "Tổng tất cả đơn vị" option
+        prev_fh = self._fhmap_combo.currentData()
+        self._fhmap_combo.blockSignals(True)
+        self._fhmap_combo.clear()
+        self._fhmap_combo.addItem("Tất cả", None)
+        self._fhmap_combo.addItem("Tổng tất cả đơn vị", "ALL_DON_VI")
+        for r in wh_rows:
+            prefix = "Kho" if r["type"] == "TONG" else "ĐV"
+            self._fhmap_combo.addItem(f"[{prefix}] {r['name']}", r["id"])
+        for i in range(self._fhmap_combo.count()):
+            if self._fhmap_combo.itemData(i) == prev_fh:
+                self._fhmap_combo.setCurrentIndex(i)
+                break
+        self._fhmap_combo.blockSignals(False)
+
         self._reload_pie()
-        self._reload_stacked()
         self._reload_line()
         self._reload_grouped()
         self._reload_hbar()
+        self._reload_pareto()
+        self._reload_full_heatmap()
 
     # ── Reload helpers ────────────────────────────────────────────────────────
 
@@ -864,37 +1337,6 @@ class BieuDoPage(QWidget):
             if r["quality_level"] in h:
                 h[r["quality_level"]] = r["qty"]
         self._pie.load({k: (v, _PIE_COLORS[k]) for k, v in h.items()})
-
-    def _reload_stacked(self):
-        conn = database.get_conn()
-        wh_id = self._stk_combo.currentData()
-        q = self._stk_search.text().strip().lower()
-        params: list = []
-        where_parts = ["i.quantity > 0"]
-        if wh_id:
-            where_parts.append("i.warehouse_id = ?")
-            params.append(wh_id)
-        where = "WHERE " + " AND ".join(where_parts)
-        rows = conn.execute(f"""
-            SELECT t.code AS item_code, t.name AS item_name,
-                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
-                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
-                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
-                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4
-            FROM inventory i
-            JOIN item_types t ON t.id = i.item_type_id
-            {where}
-            GROUP BY t.id
-            HAVING (h1+h2+h3+h4) > 0
-            ORDER BY t.name
-        """, params).fetchall()
-
-        if q:
-            rows = [r for r in rows if q in r["item_name"].lower() or q in r["item_code"].lower()]
-
-        items = [(r["item_code"], r["item_name"], r["h1"], r["h2"], r["h3"], r["h4"])
-                 for r in rows[:60]]  # cap at 60 items
-        self._stacked.load(items)
 
     def _reload_line(self):
         conn = database.get_conn()
@@ -1011,11 +1453,66 @@ class BieuDoPage(QWidget):
               AND i.quantity > 0
             GROUP BY w.id
             ORDER BY h4_qty DESC
-            LIMIT 5
+            LIMIT 20
         """).fetchall()
-        h4_color = _AGE_COLORS["H4"]
         self._hbar.load(
             [r["name"] for r in rows],
             [r["h4_qty"] for r in rows],
-            [h4_color] * len(rows),
+        )
+
+    def _reload_full_heatmap(self):
+        conn = database.get_conn()
+        wh_filter = self._fhmap_combo.currentData()
+        q = self._fhmap_search.text().strip().lower()
+        params: list = []
+        where_parts = ["i.quantity > 0"]
+        if wh_filter == "ALL_DON_VI":
+            where_parts.append("w.type = 'DON_VI'")
+        elif wh_filter is not None:
+            where_parts.append("i.warehouse_id = ?")
+            params.append(wh_filter)
+        where = "WHERE " + " AND ".join(where_parts)
+        rows = conn.execute(f"""
+            SELECT t.code AS item_code, t.name AS item_name,
+                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
+                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
+                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4
+            FROM inventory i
+            JOIN item_types t ON t.id = i.item_type_id
+            JOIN warehouses w ON w.id = i.warehouse_id
+            {where}
+            GROUP BY t.id
+            HAVING (h1+h2+h3+h4) > 0
+            ORDER BY h4 DESC, h3 DESC, (h1+h2+h3+h4) DESC
+        """, params).fetchall()
+        if q:
+            rows = [r for r in rows
+                    if q in r["item_name"].lower() or q in r["item_code"].lower()]
+        items = [(r["item_code"], r["item_name"], r["h1"], r["h2"], r["h3"], r["h4"])
+                 for r in rows]
+        self._full_heatmap.load(items)
+
+    def _reload_pareto(self):
+        conn = database.get_conn()
+        wh_id = self._pareto_combo.currentData()
+        params: list = []
+        where_parts = ["tx.type = 'MUON'"]
+        if wh_id:
+            where_parts.append("tx.from_warehouse_id = ?")
+            params.append(wh_id)
+        where = "WHERE " + " AND ".join(where_parts)
+        rows = conn.execute(f"""
+            SELECT it.name AS item_name, SUM(tl.quantity) AS qty
+            FROM transaction_lines tl
+            JOIN transactions tx ON tx.id = tl.transaction_id
+            JOIN item_types it ON it.id = tl.item_type_id
+            {where}
+            GROUP BY it.id
+            HAVING qty > 0
+            ORDER BY qty DESC
+        """, params).fetchall()
+        self._pareto.load(
+            [r["item_name"] for r in rows],
+            [r["qty"] for r in rows],
         )

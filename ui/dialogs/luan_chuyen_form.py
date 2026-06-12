@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QScrollArea,
     QLabel, QLineEdit, QSpinBox, QTextEdit,
-    QPushButton, QComboBox, QMessageBox, QFrame, QWidget, QDateEdit,
+    QPushButton, QComboBox, QCompleter, QMessageBox, QFrame, QWidget, QDateEdit,
 )
 from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtGui import QFont, QCursor
@@ -56,9 +56,18 @@ class TransferLineRow(QWidget):
         self.combo = QComboBox()
         self.combo.setFixedHeight(34)
         self.combo.setMinimumWidth(190)
+        self.combo.setEditable(True)
+        self.combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.combo.setStyleSheet(_FIELD)
         for it in item_types:
             self.combo.addItem(it.name, it)
+        self.combo.setCurrentIndex(-1)
+        self.combo.lineEdit().setPlaceholderText("Tìm mặt hàng...")
+        self.combo.lineEdit().setReadOnly(False)
+        completer = self.combo.completer()
+        if completer:
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
 
         self.lbl_unit = QLabel("—")
         self.lbl_unit.setFixedWidth(56)
@@ -108,8 +117,6 @@ class TransferLineRow(QWidget):
         h.addWidget(btn_del)
 
         self.combo.currentIndexChanged.connect(self._on_item_changed)
-        if item_types:
-            self._on_item_changed(0)
 
     def _on_item_changed(self, _):
         it = self.combo.currentData()
@@ -205,10 +212,12 @@ class LuanChuyenFormDialog(QDialog):
         from_lbl = "Đơn Vị Nguồn *" if self._subtype == "dv_dv" else "Kho Nguồn *"
         to_lbl   = "Đơn Vị Đích *"  if self._subtype == "dv_dv" else "Kho Đích *"
 
-        self.f_ref     = fld("VD: LC-001", 260)
-        self.f_from_wh = combo_wh(whs)
-        self.f_to_wh   = combo_wh(whs)
-        self.f_person  = fld("Tên người lập phiếu")
+        self.f_ref        = fld("VD: LC-001", 260)
+        self.f_from_wh    = combo_wh(whs)
+        self.f_to_wh      = combo_wh(whs)
+        self.f_person     = fld("Tên người lập phiếu")
+        self.f_transport  = fld("Phương tiện / đơn vị vận chuyển")
+        self.f_deliverer  = fld("Tên người giao hàng")
 
         self.f_date = QDateEdit(QDate.currentDate())
         self.f_date.setDisplayFormat("dd/MM/yyyy")
@@ -243,6 +252,8 @@ class LuanChuyenFormDialog(QDialog):
         col_c.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         col_c.setSpacing(10)
         col_c.addRow(lbl("Ngày Luân Chuyển *"), self.f_date)
+        col_c.addRow(lbl("Vận Chuyển"), self.f_transport)
+        col_c.addRow(lbl("Người Giao"), self.f_deliverer)
 
         row1.addLayout(col_a, 1)
         row1.addLayout(col_b, 1)
@@ -365,6 +376,8 @@ class LuanChuyenFormDialog(QDialog):
         _set_combo_by_data(self.f_from_wh, transfer.from_warehouse_id)
         _set_combo_by_data(self.f_to_wh, transfer.to_warehouse_id)
         self.f_person.setText(transfer.created_by)
+        self.f_transport.setText(transfer.transporter)
+        self.f_deliverer.setText(transfer.deliverer)
         d = QDate.fromString(transfer.transaction_date, "yyyy-MM-dd")
         if d.isValid():
             self.f_date.setDate(d)
@@ -411,6 +424,8 @@ class LuanChuyenFormDialog(QDialog):
             transaction_date=self.f_date.date().toString("yyyy-MM-dd"),
             tx_type="LUAN_CHUYEN_DV" if self._subtype == "dv_dv" else "LUAN_CHUYEN_KHO",
             created_by=self.f_person.text().strip(),
+            transporter=self.f_transport.text().strip(),
+            deliverer=self.f_deliverer.text().strip(),
             notes=self.f_notes.toPlainText().strip(),
             lines=lines,
         )

@@ -63,9 +63,9 @@ class LineItemRow(QWidget):
         self.combo.setEditable(True)
         self.combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.combo.setStyleSheet(_FIELD)
-        self.combo.addItem("— Chọn mặt hàng —", None)
         for it in item_types:
             self.combo.addItem(it.name, it)
+        self.combo.setCurrentIndex(-1)
         self.combo.lineEdit().setPlaceholderText("Tìm mặt hàng...")
         self.combo.lineEdit().setReadOnly(False)
         self._setup_search()
@@ -176,7 +176,6 @@ class LineItemRow(QWidget):
         current_id = current_it.id if current_it else None
         self.combo.blockSignals(True)
         self.combo.clear()
-        self.combo.addItem("— Chọn mặt hàng —", None)
         for it in self._item_types:
             if it.id not in exclude_ids or it.id == current_id:
                 self.combo.addItem(it.name, it)
@@ -186,6 +185,8 @@ class LineItemRow(QWidget):
                 if d and d.id == current_id:
                     self.combo.setCurrentIndex(i)
                     break
+        else:
+            self.combo.setCurrentIndex(-1)
         self.combo.blockSignals(False)
         self._setup_search()
 
