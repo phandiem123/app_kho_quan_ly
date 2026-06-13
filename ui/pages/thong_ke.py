@@ -783,7 +783,7 @@ class ThongKeSharedPage(QWidget):
     _COLS_TON   = ["STT", "Tên Hàng", "ĐVT", "H3", "H4"]
     _COLS_MUON  = ["STT", "Số Phiếu", "Ngày Mượn", "Tên Hàng",
                    "ĐVT", "Số Lượng", "Đơn Vị / Người Mượn"]
-    _COLS_H4    = ["STT", "Số Phiếu", "Ngày", "Kho", "Số M.Hàng"]
+    _COLS_H4    = ["STT", "Số Phiếu", "Ngày", "Kho", "Số M.Hàng", ""]
 
     _TABS = [
         ("ton",      "Tồn Kho"),
@@ -1244,7 +1244,7 @@ class ThongKeSharedPage(QWidget):
         rows = self._sort_rows(rows)
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_H4, [
-            (F, 52), (F, 130), (F, 110), (S, None), (F, 100),
+            (F, 52), (F, 130), (F, 110), (S, None), (F, 90), (F, 44),
         ])
         self._table.setRowCount(0)
         for i, r in enumerate(rows):
@@ -1261,6 +1261,24 @@ class ThongKeSharedPage(QWidget):
                 (str(r["line_count"]),           True),
             ], start=1):
                 self._table.setItem(ri, c, self._mk(*args))
+
+            tx_id = r["id"]
+            btn = QPushButton("•••")
+            btn.setFixedSize(32, 32)
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn.setStyleSheet("""
+                QPushButton { border: 1px solid #e0e0e0; border-radius: 6px;
+                    background: white; color: #555; font-size: 13px; font-weight: bold; }
+                QPushButton:hover { background: #f5f5f5; border-color: #bbb; }
+                QPushButton:pressed { background: #ececec; }
+            """)
+            btn.clicked.connect(lambda _, tid=tx_id, b=btn: self._show_phieu_h4_menu(tid, b))
+            cell_w = QWidget()
+            cell_w.setStyleSheet("background: transparent;")
+            cell_l = QHBoxLayout(cell_w)
+            cell_l.setContentsMargins(6, 0, 6, 0)
+            cell_l.addWidget(btn)
+            self._table.setCellWidget(ri, 5, cell_w)
 
     def _on_table_double_click(self, row: int, _: int):
         if self._active_tab != "phieu_h4":
@@ -1282,14 +1300,28 @@ class ThongKeSharedPage(QWidget):
         if not item:
             return
         tx_id = item.data(Qt.ItemDataRole.UserRole)
-        if not tx_id:
-            return
+        if tx_id:
+            self._show_phieu_h4_menu(tx_id, None)
+
+    def _show_phieu_h4_menu(self, tx_id: int, anchor):
         menu = QMenu(self)
-        act_edit = QAction("Sửa", self)
-        act_del  = QAction("Xóa", self)
+        menu.setStyleSheet("""
+            QMenu { background: white; border: 1px solid #e0e0e0;
+                border-radius: 8px; padding: 4px; }
+            QMenu::item { padding: 8px 20px; border-radius: 5px;
+                font-size: 12px; color: #111; }
+            QMenu::item:selected { background: #f5f5f5; }
+        """)
+        act_edit = QAction("✏  Sửa phiếu", self)
+        act_del  = QAction("🗑  Xóa phiếu", self)
         menu.addAction(act_edit)
+        menu.addSeparator()
         menu.addAction(act_del)
-        act = menu.exec(QCursor.pos())
+        if anchor:
+            pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
+        else:
+            pos = QCursor.pos()
+        act = menu.exec(pos)
         if act == act_edit:
             self._edit_phieu_h4(tx_id)
         elif act == act_del:
