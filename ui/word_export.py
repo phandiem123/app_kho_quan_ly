@@ -30,15 +30,17 @@ def so_thanh_chu(amount: int) -> str:
             p.append(_U[d])
         return " ".join(p)
 
-    ty     = amount // 1_000_000_000
-    trieu  = (amount % 1_000_000_000) // 1_000_000
-    nghin  = (amount % 1_000_000) // 1_000
-    tram   = amount % 1_000
+    nghin_ty = amount // 1_000_000_000_000
+    ty       = (amount % 1_000_000_000_000) // 1_000_000_000
+    trieu    = (amount % 1_000_000_000) // 1_000_000
+    nghin    = (amount % 1_000_000) // 1_000
+    tram     = amount % 1_000
     parts  = []
-    if ty:    parts.append(_b(ty)    + " tỷ")
-    if trieu: parts.append(_b(trieu) + " triệu")
-    if nghin: parts.append(_b(nghin) + " nghìn")
-    if tram:  parts.append(_b(tram))
+    if nghin_ty: parts.append(_b(nghin_ty % 1000) + " nghìn tỷ")
+    if ty:       parts.append(_b(ty)    + " tỷ")
+    if trieu:    parts.append(_b(trieu) + " triệu")
+    if nghin:    parts.append(_b(nghin) + " nghìn")
+    if tram:     parts.append(_b(tram))
     s = " ".join(parts)
     return s[0].upper() + s[1:] + " đồng"
 
@@ -366,6 +368,179 @@ def export_nhap_kho(parent, receipt, lines) -> None:
 
     doc.save(path)
     QMessageBox.information(parent, "Xuất Word", f"Đã lưu:\n{path}")
+
+
+def export_nhap_kho_excel(parent, receipt, lines) -> None:
+    """Xuất phiếu nhập kho ra Excel theo mẫu chuẩn (8 cột, header 2 dòng)."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+    except ImportError:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(parent, "Lỗi", "Cần cài openpyxl:\npip install openpyxl")
+        return
+
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+    path, _ = QFileDialog.getSaveFileName(
+        parent, "Lưu Phiếu Nhập Kho",
+        f"PhieuNhapKho_{receipt.reference_number or 'export'}.xlsx",
+        "Excel Files (*.xlsx)",
+    )
+    if not path:
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Phiếu Nhập Kho"
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.paperSize = 9  # A4
+
+    TN = "Times New Roman"
+    thin = Side(style="thin", color="000000")
+    bdr = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    def aln(h="left", v="center", wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+
+    def sh(row, height):
+        ws.row_dimensions[row].height = height
+
+    for col, w in [("A", 5), ("B", 28), ("C", 7), ("D", 10), ("E", 10),
+                   ("F", 12), ("G", 14), ("H", 18)]:
+        ws.column_dimensions[col].width = w
+
+    # ── Row 1: QUÂN KHU 5 | Số phiếu ────────────────────────────────────────
+    sh(1, 18)
+    ws.merge_cells("A1:B1")
+    ws["A1"].value = "QUÂN KHU 5"
+    ws["A1"].font = Font(name=TN, size=11)
+    ws["A1"].alignment = aln("center")
+    ws.merge_cells("G1:H1")
+    ws["G1"].value = f"Số phiếu: {receipt.reference_number or ''}"
+    ws["G1"].font = Font(name=TN, size=11)
+    ws["G1"].alignment = aln("right")
+
+    # ── Row 2: CỤC HẬU CẦN – KỸ THUẬT | PHIẾU NHẬP KHO ─────────────────────
+    sh(2, 26)
+    ws.merge_cells("A2:B2")
+    ws["A2"].value = "CỤC HẬU CẦN – KỸ THUẬT"
+    ws["A2"].font = Font(name=TN, size=11, bold=True, underline="single")
+    ws["A2"].alignment = aln("center")
+    ws.merge_cells("C2:F2")
+    ws["C2"].value = "PHIẾU NHẬP KHO"
+    ws["C2"].font = Font(name=TN, size=16, bold=True)
+    ws["C2"].alignment = aln("center")
+
+    # ── Row 3: blank ──────────────────────────────────────────────────────────
+    sh(3, 8)
+
+    # ── Rows 4-6: info block ─────────────────────────────────────────────────
+    source  = receipt.from_warehouse_name or receipt.supplier or ""
+    src_lbl = {"from_unit": "Đơn vị giao", "unit_return": "Đơn vị trả",
+               "event_return": "Nguồn trả"}.get(receipt.subtype, "Đơn vị giao")
+    left_info = [
+        f"Giao tại kho: {receipt.to_warehouse_name or ''}",
+        f"{src_lbl}: {source}",
+        f"Hàng do: {receipt.transporter or ''}",
+    ]
+    for ri, text in enumerate(left_info, start=4):
+        sh(ri, 18)
+        ws.merge_cells(f"A{ri}:C{ri}")
+        c = ws.cell(row=ri, column=1, value=text)
+        c.font = Font(name=TN, size=11)
+        c.alignment = aln("left")
+    ws.merge_cells("D4:H6")
+    ws["D4"].value = f"Nội dung: {receipt.notes or ''}"
+    ws["D4"].font = Font(name=TN, size=11)
+    ws["D4"].alignment = aln("left", wrap=True)
+
+    # ── Row 7: blank ──────────────────────────────────────────────────────────
+    sh(7, 8)
+
+    # ── Rows 8-9: table header (double row) ──────────────────────────────────
+    hf = Font(name=TN, size=11, bold=True)
+    ha = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    hfill = PatternFill("solid", fgColor="F2F2F2")
+    sh(8, 22); sh(9, 20)
+    for ci, val in enumerate(["TT","Tên hàng","ĐVT","Số lượng","","Đơn giá","Thành tiền","Ghi chú"], 1):
+        c = ws.cell(row=8, column=ci, value=val)
+        c.font = hf; c.alignment = ha; c.border = bdr; c.fill = hfill
+    for ci, val in enumerate(["","","","Kế hoạch","Thực hiện","","",""], 1):
+        c = ws.cell(row=9, column=ci, value=val)
+        c.font = hf; c.alignment = ha; c.border = bdr; c.fill = hfill
+    ws.merge_cells("A8:A9"); ws.merge_cells("B8:B9"); ws.merge_cells("C8:C9")
+    ws.merge_cells("D8:E8")
+    ws.merge_cells("F8:F9"); ws.merge_cells("G8:G9"); ws.merge_cells("H8:H9")
+
+    # ── Data rows ─────────────────────────────────────────────────────────────
+    grand_total = 0.0
+    DR = 10
+    for i, line in enumerate(lines):
+        r = DR + i
+        sh(r, 20)
+        price = getattr(line, "unit_price", 0.0) or 0.0
+        lt = line.quantity * price
+        grand_total += lt
+        vals = [i + 1, line.item_name, line.unit_of_measure, line.quantity, "",
+                price or "", lt or "", getattr(line, "notes", "") or ""]
+        alns = [aln("center"), aln("left"), aln("center"), aln("center"), aln("center"),
+                aln("right"), aln("right"), aln("left")]
+        for ci, (val, al) in enumerate(zip(vals, alns), 1):
+            c = ws.cell(row=r, column=ci, value=val)
+            c.font = Font(name=TN, size=11); c.alignment = al; c.border = bdr
+            if ci in (6, 7) and isinstance(val, (int, float)) and val:
+                c.number_format = "#,##0"
+
+    # ── Tổng cộng row ─────────────────────────────────────────────────────────
+    tr = DR + len(lines)
+    sh(tr, 22)
+    ws.merge_cells(f"A{tr}:F{tr}")
+    c = ws.cell(row=tr, column=1, value="Tổng cộng")
+    c.font = Font(name=TN, size=11, bold=True); c.alignment = aln("center"); c.border = bdr
+    c = ws.cell(row=tr, column=7, value=grand_total if grand_total else "")
+    c.font = Font(name=TN, size=11, bold=True); c.alignment = aln("right"); c.border = bdr
+    if grand_total:
+        c.number_format = "#,##0"
+    ws.cell(row=tr, column=8).border = bdr
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    f1 = tr + 1; sh(f1, 18)
+    ws.merge_cells(f"A{f1}:H{f1}")
+    c = ws.cell(row=f1, column=1, value=f"Tổng: {len(lines):02d} Khoản")
+    c.font = Font(name=TN, size=11); c.alignment = aln("left")
+
+    f2 = tr + 2; sh(f2, 18)
+    ws.merge_cells(f"A{f2}:H{f2}")
+    c = ws.cell(row=f2, column=1,
+                value=f"Thành tiền: {so_thanh_chu(int(grand_total))}.")
+    c.font = Font(name=TN, size=11); c.alignment = aln("left")
+
+    dy, mo, yr = _parse_date(receipt.transaction_date or "")
+    dr = tr + 3; sh(dr, 18)
+    ws.merge_cells(f"E{dr}:H{dr}")
+    c = ws.cell(row=dr, column=5,
+                value=f"Ngày {dy}  tháng {mo}  năm {yr}")
+    c.font = Font(name=TN, size=11, italic=True); c.alignment = aln("center")
+
+    sh(dr + 1, 14)
+
+    sr = dr + 2; sh(sr, 18)
+    sigs = [("A", "A", "NGƯỜI LẬP PHIẾU"), ("B", "C", "NGƯỜI GIAO"),
+            ("D", "E", "NGƯỜI NHẬN"), ("F", "G", "PHÒNG QUÂN NHU"), ("H", "H", "THỦ TRƯỞNG")]
+    for cs, ce, label in sigs:
+        if cs != ce:
+            ws.merge_cells(f"{cs}{sr}:{ce}{sr}")
+        ci = ord(cs) - ord("A") + 1
+        c = ws.cell(row=sr, column=ci, value=label)
+        c.font = Font(name=TN, size=11, bold=True); c.alignment = aln("center")
+
+    try:
+        wb.save(path)
+        QMessageBox.information(parent, "Xuất Excel",
+                                f"Đã lưu phiếu nhập kho:\n{path}")
+    except Exception as exc:
+        QMessageBox.warning(parent, "Lỗi", f"Không thể lưu file:\n{exc}")
 
 
 def export_xuat_kho(parent, issue, lines) -> None:

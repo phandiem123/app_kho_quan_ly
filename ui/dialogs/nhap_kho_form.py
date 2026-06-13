@@ -948,16 +948,17 @@ class NhapKhoFormDialog(QDialog):
                 it for it in self._item_types if it.id in loan_ids
             ]
 
-    def _save(self):
+    def _do_save(self) -> "Receipt | None":
         ref = self.f_ref.text().strip()
         if not ref:
-            return self._err("Vui lòng nhập Số Phiếu.")
+            self._err("Vui lòng nhập Số Phiếu."); return None
         _d = QDate.fromString(self.f_date.text(), "dd/MM/yyyy")
         if not _d.isValid():
-            return self._err("Ngày không hợp lệ. Vui lòng nhập đúng định dạng dd/MM/yyyy.")
+            self._err("Ngày không hợp lệ. Vui lòng nhập đúng định dạng dd/MM/yyyy."); return None
         wh_id = self.f_wh.currentData()
         if not wh_id:
-            return self._err("Vui lòng chọn Kho Nhập.")
+            self._err("Vui lòng chọn Kho Nhập."); return None
+        wh_name = self.f_wh.currentText()
 
         from_wh_id = None
         supplier = ""
@@ -968,33 +969,32 @@ class NhapKhoFormDialog(QDialog):
         elif self._subtype == "unit_return":
             from_wh_id = self.f_from_wh.currentData()
             if not from_wh_id:
-                return self._err("Vui lòng chọn Đơn Vị Trả.")
+                self._err("Vui lòng chọn Đơn Vị Trả."); return None
         elif self._subtype == "event_return":
             loan_tx_id = self.f_event_combo.currentData()
             if not loan_tx_id:
-                return self._err("Vui lòng chọn Sự Kiện.")
-            # Extract event name from combo label (text before first "  (")
+                self._err("Vui lòng chọn Sự Kiện."); return None
             combo_text = self.f_event_combo.currentText()
             supplier = combo_text.split("  (")[0] if "  (" in combo_text else combo_text
         elif self._subtype == "shared_return":
             if self._shared_source == "unit_return":
                 from_wh_id = self.f_from_wh.currentData()
                 if not from_wh_id:
-                    return self._err("Vui lòng chọn Đơn Vị Trả.")
+                    self._err("Vui lòng chọn Đơn Vị Trả."); return None
             elif self._shared_source == "warehouse":
                 from_wh_id = self.f_src_wh.currentData()
                 if not from_wh_id:
-                    return self._err("Vui lòng chọn Kho Nguồn.")
+                    self._err("Vui lòng chọn Kho Nguồn."); return None
             else:
                 loan_tx_id = self.f_event_combo.currentData()
                 if not loan_tx_id:
-                    return self._err("Vui lòng chọn Sự Kiện.")
+                    self._err("Vui lòng chọn Sự Kiện."); return None
                 combo_text = self.f_event_combo.currentText()
                 supplier = combo_text.split("  (")[0] if "  (" in combo_text else combo_text
         else:
             from_wh_id = self.f_from_wh.currentData()
             if not from_wh_id:
-                return self._err("Vui lòng chọn Đơn Vị Giao.")
+                self._err("Vui lòng chọn Đơn Vị Giao."); return None
 
         lines: list[ReceiptLine] = []
         for i in range(self._rows_layout.count()):
@@ -1004,17 +1004,17 @@ class NhapKhoFormDialog(QDialog):
                 if d:
                     lines.append(d)
         if not lines:
-            return self._err("Vui lòng thêm ít nhất một mặt hàng.")
+            self._err("Vui lòng thêm ít nhất một mặt hàng."); return None
 
         exclude = self._editing.id if self._editing else None
         if ref_exists(ref, exclude):
-            return self._err(f"Số Phiếu '{ref}' đã tồn tại.")
+            self._err(f"Số Phiếu '{ref}' đã tồn tại."); return None
 
         receipt = Receipt(
             id=self._editing.id if self._editing else None,
             reference_number=ref,
             to_warehouse_id=wh_id,
-            to_warehouse_name="",
+            to_warehouse_name=wh_name,
             from_warehouse_id=from_wh_id,
             transaction_date=QDate.fromString(self.f_date.text(), "dd/MM/yyyy").toString("yyyy-MM-dd"),
             supplier=supplier,
@@ -1034,6 +1034,19 @@ class NhapKhoFormDialog(QDialog):
             update(receipt)
         else:
             insert(receipt)
+        return receipt
+
+    def _save(self):
+        receipt = self._do_save()
+        if receipt is not None:
+            self.accept()
+
+    def _on_export_phieu(self):
+        receipt = self._do_save()
+        if receipt is None:
+            return
+        from ui.word_export import export_nhap_kho_excel
+        export_nhap_kho_excel(self, receipt, receipt.lines)
         self.accept()
 
     def _err(self, msg: str):

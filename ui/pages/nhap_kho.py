@@ -337,8 +337,8 @@ class DetailPanel(QWidget):
         QMessageBox.information(self, "Xuất Excel", f"Đã lưu file:\n{path}")
 
     def _export_word(self):
-        from ui.word_export import export_nhap_kho
-        export_nhap_kho(self, self._receipt, self._lines)
+        from ui.word_export import export_nhap_kho_excel
+        export_nhap_kho_excel(self, self._receipt, self._lines)
 
 
 # ── Main Page ─────────────────────────────────────────────────────────────────
