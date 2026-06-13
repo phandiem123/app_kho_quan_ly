@@ -911,9 +911,9 @@ class ThongKeSharedPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setStyleSheet("ThongKeSharedPage { background: #fafafa; }")
-        self._active_tab    = "ton"
+        self._active_tab     = "ton"
         self._active_wh_id:   int | None = None
-        self._active_unit_id: int | None = None
+        self._active_wh_type: str | None = None  # "TONG" | "DON_VI" | None
         self._raw_ton:    list = []
         self._raw_muon:   list = []
         self._raw_h4:     list = []
@@ -1011,18 +1011,10 @@ class ThongKeSharedPage(QWidget):
 
         self._wh_combo = QComboBox()
         self._wh_combo.setFixedHeight(34)
-        self._wh_combo.setMinimumWidth(200)
+        self._wh_combo.setMinimumWidth(220)
         self._wh_combo.setFont(QFont(FONT, 12))
         self._wh_combo.setStyleSheet(_combo_style)
         self._wh_combo.currentIndexChanged.connect(self._on_wh_changed)
-
-        self._unit_combo = QComboBox()
-        self._unit_combo.setFixedHeight(34)
-        self._unit_combo.setMinimumWidth(200)
-        self._unit_combo.setFont(QFont(FONT, 12))
-        self._unit_combo.setStyleSheet(_combo_style)
-        self._unit_combo.currentIndexChanged.connect(self._on_unit_changed)
-        self._unit_combo.setVisible(False)
 
         root.addLayout(top)
         root.addSpacing(20)
@@ -1062,8 +1054,6 @@ class ThongKeSharedPage(QWidget):
             tab_h.addWidget(btn)
         tab_h.addStretch()
         tab_h.addWidget(self._muon_search)
-        tab_h.addSpacing(8)
-        tab_h.addWidget(self._unit_combo)
         tab_h.addSpacing(8)
         tab_h.addWidget(self._wh_combo)
         tab_h.addSpacing(8)
@@ -1131,7 +1121,6 @@ class ThongKeSharedPage(QWidget):
         self._apply_tab_style()
         is_muon = (key == "muon")
         self._wh_combo.setVisible(True)
-        self._unit_combo.setVisible(is_muon)
         self._search.setVisible(not is_muon)
         self._muon_search.setVisible(is_muon)
         if key == "ton":
@@ -1141,11 +1130,10 @@ class ThongKeSharedPage(QWidget):
         self._apply_filter()
 
     def _on_wh_changed(self, _):
-        self._active_wh_id = self._wh_combo.currentData()
-        self._reload_data()
-
-    def _on_unit_changed(self, _):
-        self._active_unit_id = self._unit_combo.currentData()
+        data = self._wh_combo.currentData()
+        if data is None:  # separator — không làm gì
+            return
+        self._active_wh_id, self._active_wh_type = data
         self._reload_data()
 
     def _on_nhap_moi(self):
@@ -1162,7 +1150,8 @@ class ThongKeSharedPage(QWidget):
 
     def _on_chuyen_h4(self):
         from ui.dialogs.chuyen_h4_form import ChuyenH4FormDialog
-        dlg = ChuyenH4FormDialog(self, wh_id=self._active_wh_id)
+        wh_id = self._active_wh_id if self._active_wh_type == "TONG" else None
+        dlg = ChuyenH4FormDialog(self, wh_id=wh_id)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
@@ -1176,77 +1165,88 @@ class ThongKeSharedPage(QWidget):
 
     def refresh(self):
         self._reload_warehouses()
-        self._reload_units()
         self._reload_data()
 
     def _reload_warehouses(self):
         current = self._wh_combo.currentData()
         self._wh_combo.blockSignals(True)
         self._wh_combo.clear()
-        self._wh_combo.addItem("Tất cả kho", None)
         conn = database.get_conn()
-        for r in conn.execute(
-            "SELECT id, code, name FROM warehouses"
-            " WHERE type='TONG' AND is_active=1 ORDER BY name"
-        ).fetchall():
-            self._wh_combo.addItem(r["name"], r["id"])
-        for i in range(self._wh_combo.count()):
-            if self._wh_combo.itemData(i) == current:
-                self._wh_combo.setCurrentIndex(i)
-                break
+        tong_rows = conn.execute(
+            "SELECT id, name FROM warehouses WHERE type='TONG' AND is_active=1 ORDER BY name"
+        ).fetchall()
+        dv_rows = conn.execute(
+            "SELECT id, name FROM warehouses WHERE type='DON_VI' AND is_active=1 ORDER BY name"
+        ).fetchall()
+        self._wh_combo.addItem("Tất cả kho", (None, "TONG"))
+        for r in tong_rows:
+            self._wh_combo.addItem(r["name"], (r["id"], "TONG"))
+        self._wh_combo.insertSeparator(self._wh_combo.count())
+        self._wh_combo.addItem("Tất cả đơn vị", (None, "DON_VI"))
+        for r in dv_rows:
+            self._wh_combo.addItem(r["name"], (r["id"], "DON_VI"))
+        restored = False
+        if current is not None:
+            for i in range(self._wh_combo.count()):
+                if self._wh_combo.itemData(i) == current:
+                    self._wh_combo.setCurrentIndex(i)
+                    restored = True
+                    break
+        if not restored:
+            self._wh_combo.setCurrentIndex(0)
         self._wh_combo.blockSignals(False)
-        self._active_wh_id = self._wh_combo.currentData()
-
-    def _reload_units(self):
-        current = self._unit_combo.currentData()
-        self._unit_combo.blockSignals(True)
-        self._unit_combo.clear()
-        self._unit_combo.addItem("Tất cả đơn vị", None)
-        conn = database.get_conn()
-        for r in conn.execute(
-            "SELECT id, name FROM warehouses"
-            " WHERE type='DON_VI' AND is_active=1 ORDER BY name"
-        ).fetchall():
-            self._unit_combo.addItem(r["name"], r["id"])
-        for i in range(self._unit_combo.count()):
-            if self._unit_combo.itemData(i) == current:
-                self._unit_combo.setCurrentIndex(i)
-                break
-        self._unit_combo.blockSignals(False)
-        self._active_unit_id = self._unit_combo.currentData()
+        data = self._wh_combo.currentData()
+        if isinstance(data, tuple):
+            self._active_wh_id, self._active_wh_type = data
+        else:
+            self._active_wh_id, self._active_wh_type = None, "TONG"
 
     def _reload_data(self):
         conn = database.get_conn()
         wh_id   = self._active_wh_id
-        unit_id = self._active_unit_id
+        wh_type = self._active_wh_type
 
-        # Tab 1: Tồn kho H3/H4 (lọc theo kho)
-        inv_f = "AND i.warehouse_id = ?" if wh_id else ""
-        p_ton = [wh_id] if wh_id else []
-        self._raw_ton = conn.execute(f"""
-            SELECT t.id AS item_type_id, t.code AS item_code,
-                   t.name AS item_name, t.unit_of_measure,
-                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
-                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4
-            FROM inventory i
-            JOIN item_types t ON t.id = i.item_type_id
-            WHERE i.is_shared=1 AND i.quality_level IN ('H3','H4') {inv_f}
-            GROUP BY t.id HAVING (h3 + h4) > 0 ORDER BY t.name
-        """, p_ton).fetchall()
+        # Tab 1: Tồn kho H3/H4
+        # TONG+id → lọc theo kho; TONG+None → tất cả kho
+        # DON_VI+id → items đơn vị đó đang mượn; DON_VI+None → tất cả items đơn vị đang mượn
+        if wh_type == "DON_VI":
+            unit_f = "AND tx.to_warehouse_id = ?" if wh_id else ""
+            p_ton  = [wh_id] if wh_id else []
+            self._raw_ton = conn.execute(f"""
+                SELECT t.id AS item_type_id, t.name AS item_name, t.unit_of_measure,
+                       SUM(CASE WHEN tl.quality_level_from='H3' OR tl.quality_level_from IS NULL
+                                THEN tl.quantity ELSE 0 END) AS h3,
+                       SUM(CASE WHEN tl.quality_level_from='H4' THEN tl.quantity ELSE 0 END) AS h4
+                FROM transactions tx
+                JOIN transaction_lines tl ON tl.transaction_id = tx.id
+                JOIN item_types t ON t.id = tl.item_type_id
+                WHERE tx.type='MUON' {unit_f}
+                GROUP BY t.id HAVING (h3 + h4) > 0 ORDER BY t.name
+            """, p_ton).fetchall()
+        else:  # TONG
+            inv_f = "AND i.warehouse_id = ?" if wh_id else ""
+            p_ton = [wh_id] if wh_id else []
+            self._raw_ton = conn.execute(f"""
+                SELECT t.id AS item_type_id, t.name AS item_name, t.unit_of_measure,
+                       SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                       SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4
+                FROM inventory i
+                JOIN item_types t ON t.id = i.item_type_id
+                WHERE i.is_shared=1 AND i.quality_level IN ('H3','H4') {inv_f}
+                GROUP BY t.id HAVING (h3 + h4) > 0 ORDER BY t.name
+            """, p_ton).fetchall()
 
-        # Tab 2: Đang cho mượn (lọc theo kho xuất AND/OR đơn vị mượn)
-        muon_clauses = []
-        p_muon: list = []
-        if wh_id:
-            muon_clauses.append("tx.from_warehouse_id = ?")
-            p_muon.append(wh_id)
-        if unit_id:
-            muon_clauses.append("tx.to_warehouse_id = ?")
-            p_muon.append(unit_id)
-        muon_f = ("AND " + " AND ".join(muon_clauses)) if muon_clauses else ""
+        # Tab 2: Đang cho mượn
+        # TONG+id → lọc kho xuất; DON_VI+id → lọc đơn vị mượn; else → tất cả
+        if wh_type == "TONG" and wh_id:
+            muon_f, p_muon = "AND tx.from_warehouse_id = ?", [wh_id]
+        elif wh_type == "DON_VI" and wh_id:
+            muon_f, p_muon = "AND tx.to_warehouse_id = ?", [wh_id]
+        else:
+            muon_f, p_muon = "", []
         self._raw_muon = conn.execute(f"""
             SELECT tx.transaction_date, tx.reference_number,
-                   t.code AS item_code, t.name AS item_name, t.unit_of_measure,
+                   t.name AS item_name, t.unit_of_measure,
                    tl.quantity,
                    COALESCE(wto.name, tx.supplier, '') AS borrower
             FROM transactions tx
@@ -1257,9 +1257,11 @@ class ThongKeSharedPage(QWidget):
             ORDER BY tx.transaction_date DESC, tx.id DESC, tl.id
         """, p_muon).fetchall()
 
-        # Tab 3: Phiếu chuyển H4 (lọc theo kho)
-        h4_f  = "AND tx.to_warehouse_id = ?" if wh_id else ""
-        p_h4  = [wh_id] if wh_id else []
+        # Tab 3: Phiếu chuyển H4 (chỉ lọc khi chọn kho TONG cụ thể)
+        if wh_type == "TONG" and wh_id:
+            h4_f, p_h4 = "AND tx.to_warehouse_id = ?", [wh_id]
+        else:
+            h4_f, p_h4 = "", []
         self._raw_h4 = conn.execute(f"""
             SELECT tx.id, tx.reference_number, tx.transaction_date,
                    w.name AS wh_name,
