@@ -16,6 +16,68 @@ from database.xuat_kho import (
 
 FONT = "Segoe UI"
 
+
+class _DisplayItem:
+    """Wrapper cho ItemType với tên hiển thị tuỳ chỉnh (thêm hậu tố DC/H4)."""
+    __slots__ = ('id', 'code', 'name', 'display_name', 'unit_of_measure', 'unit_price', 'category')
+
+    def __init__(self, id, code, name, display_name, unit_of_measure, unit_price, category):
+        self.id = id
+        self.code = code
+        self.name = name               # tên gốc — dùng khi lưu ReceiptLine
+        self.display_name = display_name  # tên hiển thị — dùng trong combo
+        self.unit_of_measure = unit_of_measure
+        self.unit_price = unit_price
+        self.category = category       # 'NORMAL' | 'SHARED' | 'H4'
+
+
+def _get_unit_item_entries(unit_wh_id: int) -> list[_DisplayItem]:
+    """Trả về danh sách mặt hàng tồn kho tại đơn vị, gom theo 3 loại NORMAL/SHARED/H4.
+    Nếu 1 sản phẩm có nhiều loại → thêm hậu tố (DC) hoặc (H4) để phân biệt."""
+    import database
+    from collections import Counter
+    conn = database.get_conn()
+    rows = conn.execute("""
+        SELECT it.id, it.code, it.name, it.unit_of_measure,
+               COALESCE(it.unit_price, 0) AS unit_price,
+               CASE
+                   WHEN i.is_shared = 1                     THEN 'SHARED'
+                   WHEN i.quality_level = 'H4' AND i.is_shared = 0 THEN 'H4'
+                   ELSE 'NORMAL'
+               END AS category,
+               SUM(i.quantity) AS total_qty
+        FROM inventory i
+        JOIN item_types it ON it.id = i.item_type_id
+        WHERE i.warehouse_id = ? AND i.quantity > 0 AND it.is_active = 1
+        GROUP BY it.id, category
+        HAVING total_qty > 0
+        ORDER BY it.name, category
+    """, (unit_wh_id,)).fetchall()
+
+    cat_count = Counter(r["id"] for r in rows)
+    entries = []
+    for r in rows:
+        name = r["name"]
+        if cat_count[r["id"]] > 1:
+            if r["category"] == "SHARED":
+                display = f"{name} (DC)"
+            elif r["category"] == "H4":
+                display = f"{name} (H4)"
+            else:
+                display = name
+        else:
+            display = name
+        entries.append(_DisplayItem(
+            id=r["id"],
+            code=r["code"],
+            name=name,
+            display_name=display,
+            unit_of_measure=r["unit_of_measure"],
+            unit_price=float(r["unit_price"]),
+            category=r["category"],
+        ))
+    return entries
+
 _FIELD = """
     QLineEdit, QComboBox, QTextEdit, QDateEdit {
         border: 1px solid #ddd; border-radius: 6px;
@@ -70,7 +132,7 @@ class LineItemRow(QWidget):
         self.combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.combo.setStyleSheet(_FIELD)
         for it in item_types:
-            self.combo.addItem(it.name, it)
+            self.combo.addItem(getattr(it, 'display_name', it.name), it)
         self.combo.setCurrentIndex(-1)
         self.combo.lineEdit().setPlaceholderText("Tìm mặt hàng...")
         self.combo.lineEdit().setReadOnly(False)
@@ -207,7 +269,7 @@ class LineItemRow(QWidget):
         self.combo.clear()
         for it in self._item_types:
             if it.id not in exclude_ids or it.id == current_id:
-                self.combo.addItem(it.name, it)
+                self.combo.addItem(getattr(it, 'display_name', it.name), it)
         if current_id is not None:
             for i in range(self.combo.count()):
                 d = self.combo.itemData(i)
@@ -240,11 +302,18 @@ class LineItemRow(QWidget):
         )
 
     def fill(self, line: ReceiptLine):
+        preferred_cat = 'H4' if line.quality_level == 'H4' else 'NORMAL'
+        best_idx = -1
         for i in range(self.combo.count()):
             it = self.combo.itemData(i)
             if it and it.id == line.item_type_id:
-                self.combo.setCurrentIndex(i)
-                break
+                if best_idx == -1:
+                    best_idx = i
+                if getattr(it, 'category', None) == preferred_cat:
+                    best_idx = i
+                    break
+        if best_idx >= 0:
+            self.combo.setCurrentIndex(best_idx)
         if line.quantity > self.spin_qty.maximum():
             self.spin_qty.setMaximum(line.quantity)
         self.spin_qty.setValue(line.quantity)
@@ -354,6 +423,7 @@ class NhapKhoFormDialog(QDialog):
         self._loan_item_types_filtered: list = []
         self._loan_max_qty_map: dict[int, int] = {}
         self._is_return_mode = self._subtype in ("unit_return", "event_return", "shared_return")
+        self._unit_item_types: list = []  # hàng lọc theo đơn vị cho subtype from_unit
 
         # Build event combo for event_return / shared_return-event source
         self.f_event_combo = QComboBox()
@@ -557,6 +627,9 @@ class NhapKhoFormDialog(QDialog):
         # Also connect warehouse-to combo (affects unit remaining lookup)
         if self._subtype == "unit_return":
             self.f_wh.currentIndexChanged.connect(self._on_unit_combo_changed)
+        # from_unit: lọc mặt hàng theo đơn vị được chọn
+        if self._subtype == "from_unit":
+            self.f_from_wh.currentIndexChanged.connect(self._on_from_unit_changed)
 
         if receipt:
             self._fill(receipt)
@@ -619,6 +692,14 @@ class NhapKhoFormDialog(QDialog):
             self._clear_rows()
             if is_wh:
                 self._reload_wh_items()
+
+    def _on_from_unit_changed(self, _):
+        unit_wh_id = self.f_from_wh.currentData()
+        self._unit_item_types = _get_unit_item_entries(unit_wh_id) if unit_wh_id else []
+        if not self._editing:
+            self._clear_rows()
+            if self._unit_item_types:
+                self._add_line()
 
     def _on_event_combo_changed(self, _):
         self._loan_tx_id = self.f_event_combo.currentData()
@@ -732,6 +813,8 @@ class NhapKhoFormDialog(QDialog):
         self._rows_layout.insertWidget(count - 1, row)
 
     def _refresh_all_combos(self):
+        if self._subtype == "from_unit":
+            return  # from_unit cho phép cùng id với category khác nhau
         used: set[int] = set()
         for i in range(self._rows_layout.count()):
             w = self._rows_layout.itemAt(i).widget()
@@ -747,11 +830,14 @@ class NhapKhoFormDialog(QDialog):
                 w.refresh_available(used - ({own_id} if own_id else set()))
 
     def _add_line(self, line: ReceiptLine | None = None):
-        item_types = (
-            self._loan_item_types_filtered
-            if self._is_return_mode and self._loan_item_types_filtered
-            else self._item_types
-        )
+        if self._subtype == "from_unit" and not line and not self._unit_item_types:
+            return  # chưa chọn đơn vị → không thêm row trống
+        if self._subtype == "from_unit":
+            item_types = self._unit_item_types if self._unit_item_types else self._item_types
+        elif self._is_return_mode and self._loan_item_types_filtered:
+            item_types = self._loan_item_types_filtered
+        else:
+            item_types = self._item_types
         max_map = self._loan_max_qty_map if self._is_return_mode and self._loan_max_qty_map else {}
         row = LineItemRow(item_types, show_price=self._show_price,
                           show_quality=self._show_quality,

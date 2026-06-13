@@ -53,7 +53,7 @@ class _ComboItem:
     def unit_price(self): return self.it.unit_price
     @property
     def display_name(self):
-        return f"{self.it.name}(DC)" if self.is_dc else self.it.name
+        return f"{self.it.name} (DC)" if self.is_dc else self.it.name
 
 
 class IssueLineRow(QWidget):
@@ -352,6 +352,7 @@ class XuatKhoFormDialog(QDialog):
         self._show_quality = show_quality
         self._quality_levels = ("H1", "H2", "H3", "H4") if self._subtype == "to_unit" else ("H1", "H2", "H3")
         self._shared_dest = "unit"
+        self._regular_item_types: list = []   # hàng thường có tồn tại kho được chọn
         self._shared_item_types: list = []
         self._dc_item_types: list = []
         self._pending_dc_lines: list = []
@@ -637,7 +638,9 @@ class XuatKhoFormDialog(QDialog):
         wh_id = self.f_from_wh.currentData()
         if not wh_id:
             self._stock_map = {}
+            self._regular_item_types = []
             self._shared_item_types = []
+            self._dc_item_types = []
             return
         conn = database.get_conn()
         if self._subtype == "to_unit":
@@ -648,6 +651,8 @@ class XuatKhoFormDialog(QDialog):
                 GROUP BY item_type_id, quality_level
             """, (wh_id,)).fetchall()
             stock_map = {(r["item_type_id"], r["quality_level"]): r["qty"] for r in rows}
+            regular_ids = {r["item_type_id"] for r in rows}
+            self._regular_item_types = [it for it in self._item_types if it.id in regular_ids]
             dc_rows = conn.execute("""
                 SELECT item_type_id, quality_level, SUM(quantity) AS qty
                 FROM inventory
@@ -677,7 +682,7 @@ class XuatKhoFormDialog(QDialog):
             w = self._rows_layout.itemAt(i).widget()
             if isinstance(w, IssueLineRow):
                 if self._subtype == "to_unit":
-                    w.set_item_types(self._item_types + self._dc_item_types)
+                    w.set_item_types(self._regular_item_types + self._dc_item_types)
                 elif self._subtype == "shared_loan" and self._shared_item_types:
                     w.set_item_types(self._shared_item_types)
                 w.update_stock_map(self._stock_map)
@@ -703,7 +708,7 @@ class XuatKhoFormDialog(QDialog):
 
     def _add_line(self, line: IssueLine | None = None):
         if self._subtype == "to_unit":
-            item_types = self._item_types + self._dc_item_types
+            item_types = self._regular_item_types + self._dc_item_types
         elif self._subtype == "shared_loan" and line is None and self._shared_item_types:
             item_types = self._shared_item_types
         else:
@@ -885,7 +890,7 @@ class XuatKhoFormDialog(QDialog):
                       "Để xuất hàng dùng chung, hãy dùng tab Xuất Hàng Dùng Chung.")
             return None
 
-        zero_lines = [l.item_name + ("(DC)" if l.is_shared else "") for l in all_lines + dc_lines if l.quantity <= 0]
+        zero_lines = [l.item_name + (" (DC)" if l.is_shared else "") for l in all_lines + dc_lines if l.quantity <= 0]
         if zero_lines:
             self._err(
                 "Mặt hàng sau đã hết tồn kho, không thể xuất:\n"
@@ -912,7 +917,7 @@ class XuatKhoFormDialog(QDialog):
                 available = self._stock_map.get((line.item_type_id, line.quality_level, True), 0)
                 if line.quantity > available:
                     self._err(
-                        f"'{line.item_name}(DC)' ({line.quality_level}) không đủ tồn kho dùng chung.\n"
+                        f"'{line.item_name} (DC)' ({line.quality_level}) không đủ tồn kho dùng chung.\n"
                         f"Tồn DC: {available}  –  Xuất: {line.quantity}"
                     )
                     return None

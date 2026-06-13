@@ -9,6 +9,33 @@ from PyQt6.QtGui import QFont, QCursor, QAction
 import database
 from database.xuat_kho import Issue, IssueLine, get_all, get_lines, delete as issue_delete
 
+def _get_dc_lines_for_issue(issue: Issue) -> list[IssueLine]:
+    """Load hàng DC từ MUON transaction tự động tạo khi xuất đơn vị."""
+    if not issue.to_warehouse_id:
+        return []
+    conn = database.get_conn()
+    muon_rows = conn.execute("""
+        SELECT id FROM transactions
+        WHERE type = 'MUON'
+          AND from_warehouse_id = ?
+          AND to_warehouse_id = ?
+          AND transaction_date = ?
+          AND reference_number LIKE ?
+        ORDER BY id
+    """, (
+        issue.from_warehouse_id,
+        issue.to_warehouse_id,
+        issue.transaction_date,
+        issue.reference_number + "-DC%",
+    )).fetchall()
+    dc_lines: list[IssueLine] = []
+    for row in muon_rows:
+        for line in get_lines(row["id"]):
+            line.is_shared = True
+            dc_lines.append(line)
+    return dc_lines
+
+
 _STATUS_COLORS = {
     "Đã xuất":      ("#555",    "#f0f0f0"),
     "Chưa trả hết": ("#92400e", "#fef3c7"),
@@ -200,11 +227,12 @@ class DetailPanel(QWidget):
                 self._sub.setColumnWidth(i, w)
         root.addWidget(self._sub)
 
-        # Total row (below table)
+        # Total row (below table) — chỉ tính hàng thường, bỏ qua hàng DC
         if show_price and lines:
             grand_total = sum(
                 l.quantity * (l.unit_price or self._price_map.get(l.item_type_id, 0.0))
                 for l in lines
+                if not getattr(l, 'is_shared', False)
             )
             tw = QWidget()
             tw.setStyleSheet("background: transparent;")
@@ -232,14 +260,19 @@ class DetailPanel(QWidget):
             r = self._sub.rowCount()
             self._sub.insertRow(r)
             self._sub.setRowHeight(r, 38)
-            cells = [str(i + 1), line.item_name, line.unit_of_measure, str(line.quantity)]
+            is_dc = getattr(line, 'is_shared', False)
+            display_name = f"{line.item_name} (DC)" if is_dc else line.item_name
+            cells = [str(i + 1), display_name, line.unit_of_measure, str(line.quantity)]
             if show_price:
-                price = self._effective_price(line)
-                total = line.quantity * price
-                cells += [
-                    f"{price:,.0f}" if price else "—",
-                    f"{total:,.0f}" if total else "—",
-                ]
+                if is_dc:
+                    cells += ["—", "—"]
+                else:
+                    price = self._effective_price(line)
+                    total = line.quantity * price
+                    cells += [
+                        f"{price:,.0f}" if price else "—",
+                        f"{total:,.0f}" if total else "—",
+                    ]
             cells.append(line.notes or "")
             for c, val in enumerate(cells):
                 cell = QTableWidgetItem(val)
@@ -328,14 +361,23 @@ class DetailPanel(QWidget):
         grand_total = 0.0
         for i, line in enumerate(self._lines):
             row_n = blank_row + 1 + i
-            price = self._effective_price(line)
-            line_total = line.quantity * price
-            grand_total += line_total
+            is_dc = getattr(line, 'is_shared', False)
+            display_name = f"{line.item_name} (DC)" if is_dc else line.item_name
+            if is_dc:
+                price = 0.0
+                line_total = 0.0
+            else:
+                price = self._effective_price(line)
+                line_total = line.quantity * price
+                grand_total += line_total
 
-            row_data = [i + 1, line.item_name, line.unit_of_measure, line.quantity]
+            row_data = [i + 1, display_name, line.unit_of_measure, line.quantity]
             row_aligns = [center, left, center, center]
             if show_price:
-                row_data   += [price if price else "", line_total if line_total else ""]
+                if is_dc:
+                    row_data   += ["—", "—"]
+                else:
+                    row_data   += [price if price else "", line_total if line_total else ""]
                 row_aligns += [right, right]
             row_data.append(line.notes or "")
             row_aligns.append(left)
@@ -677,6 +719,8 @@ class XuatKhoPage(QWidget):
 
         issue = self._issues_order[data_idx]
         lines = get_lines(issue.id)
+        if issue.subtype == "to_unit":
+            lines = lines + _get_dc_lines_for_issue(issue)
         panel = DetailPanel(issue, lines)
         h = 200 + max(1, len(lines)) * 38 + 40
         self._table.setCellWidget(det_row, 0, panel)
