@@ -775,6 +775,100 @@ class ThongKePage(QWidget):
                 self._table.setItem(ri, c, cell)
 
 
+# ── H4 detail panel ──────────────────────────────────────────────────────────
+
+class _H4DetailPanel(QWidget):
+    def __init__(self, row: dict, parent=None):
+        super().__init__(parent)
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("""
+            _H4DetailPanel { background: #f5f5f5; }
+            QLabel { background: transparent; border: none; }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 14, 28, 14)
+        root.setSpacing(8)
+
+        title = QLabel("Chi Tiết Phiếu Chuyển H4")
+        title.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        title.setStyleSheet("color: #111;")
+        root.addWidget(title)
+
+        def pair(label, value):
+            w = QWidget(); w.setStyleSheet("background: transparent;")
+            hl = QHBoxLayout(w); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(6)
+            lbl = QLabel(label + ":"); lbl.setFont(QFont(FONT, 11))
+            lbl.setStyleSheet("color: #888;"); lbl.setFixedWidth(80)
+            val = QLabel(value or "—"); val.setFont(QFont(FONT, 11, QFont.Weight.Medium))
+            val.setStyleSheet("color: #111;")
+            hl.addWidget(lbl); hl.addWidget(val, 1)
+            return w
+
+        info = QHBoxLayout(); info.setSpacing(32)
+        info.addWidget(pair("Số Phiếu", row["reference_number"]))
+        info.addWidget(pair("Ngày",     row["transaction_date"]))
+        info.addWidget(pair("Kho",      row["wh_name"]))
+        info.addStretch()
+        root.addLayout(info)
+
+        sub_lbl = QLabel("Danh Sách Mặt Hàng")
+        sub_lbl.setFont(QFont(FONT, 10, QFont.Weight.Bold))
+        sub_lbl.setStyleSheet("color: #555;")
+        root.addWidget(sub_lbl)
+
+        conn = database.get_conn()
+        lines = conn.execute("""
+            SELECT t.name AS item_name, t.unit_of_measure,
+                   tl.quality_level_from, tl.quantity
+            FROM transaction_lines tl
+            JOIN item_types t ON t.id = tl.item_type_id
+            WHERE tl.transaction_id = ?
+            ORDER BY t.name
+        """, (row["id"],)).fetchall()
+
+        sub = QTableWidget(0, 4)
+        sub.setHorizontalHeaderLabels(["STT", "Tên Hàng", "ĐVT", "Số Lượng"])
+        sub.verticalHeader().setVisible(False)
+        sub.setShowGrid(False)
+        sub.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        sub.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        sub.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        sub.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sub.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sub.setStyleSheet("""
+            QTableWidget { border: none; background: #efefef; outline: 0; border-radius: 6px; }
+            QHeaderView::section { background: #e8e8e8; color: #777; font-size: 10px;
+                border: none; padding: 4px 8px; }
+            QTableWidget::item { padding: 4px 8px; color: #111; font-size: 12px; border: none; }
+        """)
+        sh = sub.horizontalHeader()
+        F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
+        for i, (mode, w) in enumerate([(F, 44), (S, None), (F, 72), (F, 84)]):
+            sh.setSectionResizeMode(i, mode)
+            if w:
+                sub.setColumnWidth(i, w)
+
+        for i, ln in enumerate(lines):
+            ri = sub.rowCount(); sub.insertRow(ri); sub.setRowHeight(ri, 34)
+            for c, (val, center) in enumerate([
+                (str(i + 1),          True),
+                (ln["item_name"],     False),
+                (ln["unit_of_measure"] or "—", True),
+                (str(ln["quantity"]), True),
+            ]):
+                cell = QTableWidgetItem(val)
+                cell.setFont(QFont(FONT, 11))
+                if center:
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                sub.setItem(ri, c, cell)
+
+        root.addWidget(sub)
+        self._line_count = len(lines)
+
+    def preferred_height(self) -> int:
+        return 160 + max(1, self._line_count) * 34
+
+
 # ── Thin wrappers ─────────────────────────────────────────────────────────────
 
 class ThongKeSharedPage(QWidget):
@@ -822,6 +916,8 @@ class ThongKeSharedPage(QWidget):
         self._raw_ton:    list = []
         self._raw_muon:   list = []
         self._raw_h4:     list = []
+        self._h4_rows_order: list = []
+        self._expanded_h4_row: int | None = None
         self._sort: dict[str, tuple[int, bool]] = {
             "ton": (-1, True), "muon": (-1, True), "phieu_h4": (-1, True),
         }
@@ -987,7 +1083,7 @@ class ThongKeSharedPage(QWidget):
         self._table.setStyleSheet(_TABLE_STYLE)
         self._smart_hdr.sortRequested.connect(self._on_sort)
         self._smart_hdr.visToggled.connect(self._vis_btn.on_vis_toggled)
-        self._table.cellDoubleClicked.connect(self._on_table_double_click)
+        self._table.cellClicked.connect(self._on_h4_cell_clicked)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
         tbl_v.addWidget(self._table)
@@ -1013,6 +1109,7 @@ class ThongKeSharedPage(QWidget):
 
     def _on_tab(self, key: str):
         self._sort[self._active_tab] = (self._smart_hdr._scol, self._smart_hdr._sasc)
+        self._expanded_h4_row = None
         self._active_tab = key
         sc, sa = self._sort.get(key, (-1, True))
         self._smart_hdr._scol = sc
@@ -1242,66 +1339,87 @@ class ThongKeSharedPage(QWidget):
 
     def _load_phieu_h4(self, rows):
         rows = self._sort_rows(rows)
+        self._h4_rows_order = list(rows)
+        self._expanded_h4_row = None
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_H4, [
             (F, 52), (F, 130), (F, 110), (S, None), (F, 90), (F, 44),
         ])
-        self._table.setRowCount(0)
+        self._table.clearSpans()
+        self._table.setRowCount(len(rows) * 2)
+        n = len(self._COLS_H4)
         for i, r in enumerate(rows):
-            ri = self._table.rowCount()
-            self._table.insertRow(ri)
-            self._table.setRowHeight(ri, 48)
+            dr  = i * 2
+            det = i * 2 + 1
+            self._table.setRowHeight(dr, 48)
+            self._table.setRowHeight(det, 0)
+            self._table.setSpan(det, 0, 1, n)
+
             stt_cell = self._mk(str(i + 1), True)
-            stt_cell.setData(Qt.ItemDataRole.UserRole, r["id"])
-            self._table.setItem(ri, 0, stt_cell)
+            self._table.setItem(dr, 0, stt_cell)
             for c, args in enumerate([
                 (r["reference_number"] or "—",  True),
                 (r["transaction_date"],          True),
                 (r["wh_name"] or "—",           False),
                 (str(r["line_count"]),           True),
             ], start=1):
-                self._table.setItem(ri, c, self._mk(*args))
+                self._table.setItem(dr, c, self._mk(*args))
 
             tx_id = r["id"]
             btn = QPushButton("•••")
-            btn.setFixedSize(32, 32)
+            btn.setFlat(True)
+            btn.setFont(QFont(FONT, 14))
+            btn.setFixedSize(40, 40)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn.setStyleSheet("""
-                QPushButton { border: 1px solid #e0e0e0; border-radius: 6px;
-                    background: white; color: #555; font-size: 13px; font-weight: bold; }
-                QPushButton:hover { background: #f5f5f5; border-color: #bbb; }
-                QPushButton:pressed { background: #ececec; }
+                QPushButton { color: #111; border: none; background: transparent;
+                    letter-spacing: 2px; border-radius: 6px; }
+                QPushButton:hover { background: #f0f0f0; color: #555; }
             """)
             btn.clicked.connect(lambda _, tid=tx_id, b=btn: self._show_phieu_h4_menu(tid, b))
-            cell_w = QWidget()
-            cell_w.setStyleSheet("background: transparent;")
-            cell_l = QHBoxLayout(cell_w)
-            cell_l.setContentsMargins(6, 0, 6, 0)
-            cell_l.addWidget(btn)
-            self._table.setCellWidget(ri, 5, cell_w)
+            self._table.setCellWidget(dr, n - 1, btn)
 
-    def _on_table_double_click(self, row: int, _: int):
+    def _on_h4_cell_clicked(self, row: int, col: int):
         if self._active_tab != "phieu_h4":
             return
-        item = self._table.item(row, 0)
-        if not item:
+        if col == len(self._COLS_H4) - 1:  # "•••" column — let button handle it
             return
-        tx_id = item.data(Qt.ItemDataRole.UserRole)
-        if tx_id:
-            self._edit_phieu_h4(tx_id)
+        if row % 2 == 1:  # detail row
+            return
+        det_row = row + 1
+
+        if self._expanded_h4_row == row:
+            self._table.setRowHeight(det_row, 0)
+            self._table.removeCellWidget(det_row, 0)
+            self._expanded_h4_row = None
+            return
+
+        if self._expanded_h4_row is not None:
+            prev_det = self._expanded_h4_row + 1
+            self._table.setRowHeight(prev_det, 0)
+            self._table.removeCellWidget(prev_det, 0)
+
+        data_idx = row // 2
+        if data_idx >= len(self._h4_rows_order):
+            return
+        r = self._h4_rows_order[data_idx]
+        panel = _H4DetailPanel(r)
+        h = panel.preferred_height()
+        self._table.setCellWidget(det_row, 0, panel)
+        self._table.setRowHeight(det_row, h)
+        self._expanded_h4_row = row
 
     def _on_table_context_menu(self, pos):
         if self._active_tab != "phieu_h4":
             return
         row = self._table.rowAt(pos.y())
-        if row < 0:
+        if row < 0 or row % 2 == 1:
             return
-        item = self._table.item(row, 0)
-        if not item:
+        data_idx = row // 2
+        if data_idx >= len(self._h4_rows_order):
             return
-        tx_id = item.data(Qt.ItemDataRole.UserRole)
-        if tx_id:
-            self._show_phieu_h4_menu(tx_id, None)
+        tx_id = self._h4_rows_order[data_idx]["id"]
+        self._show_phieu_h4_menu(tx_id, None)
 
     def _show_phieu_h4_menu(self, tx_id: int, anchor):
         menu = QMenu(self)
@@ -1312,8 +1430,8 @@ class ThongKeSharedPage(QWidget):
                 font-size: 12px; color: #111; }
             QMenu::item:selected { background: #f5f5f5; }
         """)
-        act_edit = QAction("✏  Sửa phiếu", self)
-        act_del  = QAction("🗑  Xóa phiếu", self)
+        act_edit = QAction("Sửa", self)
+        act_del  = QAction("Xóa", self)
         menu.addAction(act_edit)
         menu.addSeparator()
         menu.addAction(act_del)

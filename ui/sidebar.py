@@ -1,9 +1,10 @@
+import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy,
-    QScrollArea, QFrame,
+    QScrollArea, QFrame, QGraphicsDropShadowEffect,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QCursor
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint
+from PyQt6.QtGui import QFont, QCursor, QPixmap, QPainter, QPainterPath, QColor
 
 FONT = "Segoe UI"
 SIDEBAR_W = 264
@@ -75,6 +76,148 @@ class SectionHeader(QLabel):
         self.setStyleSheet("color: #999; padding: 14px 12px 4px 12px;")
 
 
+def _make_round_pixmap(path: str, size: int) -> QPixmap | None:
+    if not os.path.exists(path):
+        return None
+    src = QPixmap(path).scaled(
+        size, size,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    out = QPixmap(size, size)
+    out.fill(Qt.GlobalColor.transparent)
+    p = QPainter(out)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    clip = QPainterPath()
+    clip.addEllipse(0, 0, size, size)
+    p.setClipPath(clip)
+    p.drawPixmap(0, 0, src)
+    p.end()
+    return out
+
+
+class _AvatarPopup(QWidget):
+    """Floating popup shown on hover — large photo + name."""
+
+    def __init__(self, img_path: str, parent=None):
+        super().__init__(parent, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setWindowFlags(
+            Qt.WindowType.ToolTip
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+
+        # Card container
+        card = QWidget(self)
+        card.setObjectName("card")
+        card.setStyleSheet("""
+            QWidget#card {
+                background: white;
+                border-radius: 14px;
+                border: 1px solid #e8e8e8;
+            }
+        """)
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 60))
+        card.setGraphicsEffect(shadow)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.addWidget(card)
+
+        inner = QVBoxLayout(card)
+        inner.setContentsMargins(16, 16, 16, 14)
+        inner.setSpacing(10)
+        inner.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        # Large round photo
+        img_lbl = QLabel()
+        img_lbl.setFixedSize(160, 160)
+        img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pm = _make_round_pixmap(img_path, 160)
+        if pm:
+            img_lbl.setPixmap(pm)
+        else:
+            img_lbl.setText("NHR")
+            img_lbl.setStyleSheet(
+                "background:#ddd; border-radius:80px; color:#555; font-size:18px;"
+            )
+        inner.addWidget(img_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        name_lbl = QLabel("Nguyễn Hữu Ry")
+        name_lbl.setFont(QFont(FONT, 13, QFont.Weight.Bold))
+        name_lbl.setStyleSheet("color: #111; background: transparent;")
+        name_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        inner.addWidget(name_lbl)
+
+        pw_lbl = QLabel("Powered by")
+        pw_lbl.setFont(QFont(FONT, 10))
+        pw_lbl.setStyleSheet("color: #aaa; background: transparent;")
+        pw_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        inner.addWidget(pw_lbl)
+
+        self.adjustSize()
+
+
+class _PoweredByFooter(QWidget):
+    """Footer bar that shows hover popup with large avatar."""
+
+    def __init__(self, img_path: str, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background: white;")
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._img_path = img_path
+        self._popup: _AvatarPopup | None = None
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 10, 12, 12)
+        row.setSpacing(10)
+
+        avatar_lbl = QLabel()
+        avatar_lbl.setFixedSize(40, 40)
+        pm = _make_round_pixmap(img_path, 40)
+        if pm:
+            avatar_lbl.setPixmap(pm)
+        else:
+            avatar_lbl.setText("NR")
+            avatar_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            avatar_lbl.setStyleSheet(
+                "background:#e0e0e0; border-radius:20px; color:#555; font-size:11px;"
+            )
+        row.addWidget(avatar_lbl)
+
+        txt_col = QVBoxLayout()
+        txt_col.setSpacing(1)
+        pw_lbl = QLabel("Powered by")
+        pw_lbl.setFont(QFont(FONT, 9))
+        pw_lbl.setStyleSheet("color: #999;")
+        name_lbl = QLabel("Nguyễn Hữu Ry")
+        name_lbl.setFont(QFont(FONT, 10, QFont.Weight.Bold))
+        name_lbl.setStyleSheet("color: #333;")
+        txt_col.addWidget(pw_lbl)
+        txt_col.addWidget(name_lbl)
+        row.addLayout(txt_col, 1)
+
+    def enterEvent(self, e):
+        if self._popup is None:
+            self._popup = _AvatarPopup(self._img_path)
+        # Position popup above-left of footer, aligned to sidebar
+        global_pos = self.mapToGlobal(QPoint(0, 0))
+        pw = self._popup.sizeHint().width()
+        ph = self._popup.sizeHint().height()
+        self._popup.move(global_pos.x(), global_pos.y() - ph - 4)
+        self._popup.show()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        if self._popup:
+            self._popup.hide()
+        super().leaveEvent(e)
+
+
 class Sidebar(QWidget):
     nav_changed = pyqtSignal(str)
 
@@ -140,6 +283,17 @@ class Sidebar(QWidget):
         v.addStretch()
         scroll.setWidget(nav_widget)
         outer.addWidget(scroll, 1)
+
+        # Footer — Powered by
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setFixedHeight(1)
+        sep2.setStyleSheet("background: #f0f0f0; border: none;")
+        outer.addWidget(sep2)
+
+        _assets = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
+        _img_path = os.path.join(_assets, "avatar_nhr.jpg")
+        outer.addWidget(_PoweredByFooter(_img_path))
 
     def _add_item(self, layout: QVBoxLayout, icon: str, text: str, key: str, active: bool = False):
         item = NavItem(icon, text, key, active)
