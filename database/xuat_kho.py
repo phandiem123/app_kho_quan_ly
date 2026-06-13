@@ -309,6 +309,23 @@ def _add_inv_at_unit(conn, wh_id, item_type_id, qty, date, quality_level: str = 
         """, (wh_id, item_type_id, quality_level, qty, date))
 
 
+def _add_shared_inv(conn, wh_id, item_type_id, qty, quality_level: str):
+    row = conn.execute("""
+        SELECT id FROM inventory
+        WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
+          AND is_shared=1 AND received_at_unit_date IS NULL
+        LIMIT 1
+    """, (wh_id, item_type_id, quality_level)).fetchone()
+    if row:
+        conn.execute("UPDATE inventory SET quantity=quantity+? WHERE id=?",
+                     (qty, row["id"]))
+    else:
+        conn.execute("""
+            INSERT INTO inventory (warehouse_id, item_type_id, quality_level, quantity, is_shared)
+            VALUES (?, ?, ?, ?, 1)
+        """, (wh_id, item_type_id, quality_level, qty))
+
+
 def insert(issue: Issue) -> int:
     conn = database.get_conn()
     cur = conn.execute("""
@@ -342,6 +359,8 @@ def insert(issue: Issue) -> int:
                 WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
                   AND quality_level=? AND received_at_unit_date IS NULL
             """, (line.quantity, issue.from_warehouse_id, line.item_type_id, ql))
+            if issue.to_warehouse_id:
+                _add_shared_inv(conn, issue.to_warehouse_id, line.item_type_id, line.quantity, ql)
 
     conn.commit()
     return tx_id
@@ -375,6 +394,12 @@ def update(issue: Issue) -> None:
                     WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
                       AND quality_level=? AND received_at_unit_date IS NULL
                 """, (line.quantity, old["from_warehouse_id"], line.item_type_id, ql))
+                if old["to_warehouse_id"]:
+                    conn.execute("""
+                        UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                        WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
+                          AND quality_level=? AND received_at_unit_date IS NULL
+                    """, (line.quantity, old["to_warehouse_id"], line.item_type_id, ql))
 
     conn.execute("""
         UPDATE transactions SET
@@ -407,6 +432,8 @@ def update(issue: Issue) -> None:
                 WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
                   AND quality_level=? AND received_at_unit_date IS NULL
             """, (line.quantity, issue.from_warehouse_id, line.item_type_id, ql))
+            if issue.to_warehouse_id:
+                _add_shared_inv(conn, issue.to_warehouse_id, line.item_type_id, line.quantity, ql)
 
     conn.commit()
 
@@ -440,6 +467,12 @@ def delete(issue_id: int) -> None:
                     WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
                       AND quality_level=? AND received_at_unit_date IS NULL
                 """, (line.quantity, old["from_warehouse_id"], line.item_type_id, ql_del))
+                if old["to_warehouse_id"]:
+                    conn.execute("""
+                        UPDATE inventory SET quantity = MAX(0, quantity - ?)
+                        WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
+                          AND quality_level=? AND received_at_unit_date IS NULL
+                    """, (line.quantity, old["to_warehouse_id"], line.item_type_id, ql_del))
 
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (issue_id,))
     conn.execute("DELETE FROM transactions WHERE id=?", (issue_id,))

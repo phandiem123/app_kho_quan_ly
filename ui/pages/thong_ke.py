@@ -1208,19 +1208,20 @@ class ThongKeSharedPage(QWidget):
 
         # Tab 1: Tồn kho H3/H4
         # TONG+id → lọc theo kho; TONG+None → tất cả kho
-        # DON_VI+id → items đơn vị đó đang mượn; DON_VI+None → tất cả items đơn vị đang mượn
+        # DON_VI+id → hàng DC đơn vị đó đang giữ; DON_VI+None → hàng DC tất cả đơn vị
         if wh_type == "DON_VI":
-            unit_f = "AND tx.to_warehouse_id = ?" if wh_id else ""
-            p_ton  = [wh_id] if wh_id else []
+            if wh_id:
+                inv_f, p_ton = "AND i.warehouse_id = ?", [wh_id]
+            else:
+                inv_f, p_ton = "AND wh.type = 'DON_VI'", []
             self._raw_ton = conn.execute(f"""
                 SELECT t.id AS item_type_id, t.name AS item_name, t.unit_of_measure,
-                       SUM(CASE WHEN tl.quality_level_from='H3' OR tl.quality_level_from IS NULL
-                                THEN tl.quantity ELSE 0 END) AS h3,
-                       SUM(CASE WHEN tl.quality_level_from='H4' THEN tl.quantity ELSE 0 END) AS h4
-                FROM transactions tx
-                JOIN transaction_lines tl ON tl.transaction_id = tx.id
-                JOIN item_types t ON t.id = tl.item_type_id
-                WHERE tx.type='MUON' {unit_f}
+                       SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                       SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4
+                FROM inventory i
+                JOIN item_types t ON t.id = i.item_type_id
+                JOIN warehouses wh ON wh.id = i.warehouse_id
+                WHERE i.is_shared=1 AND i.quality_level IN ('H3','H4') {inv_f}
                 GROUP BY t.id HAVING (h3 + h4) > 0 ORDER BY t.name
             """, p_ton).fetchall()
         else:  # TONG

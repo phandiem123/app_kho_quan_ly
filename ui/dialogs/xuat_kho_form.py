@@ -189,6 +189,16 @@ class IssueLineRow(QWidget):
         it = self.combo.currentData()
         self.lbl_unit.setText(it.unit_of_measure if it else "—")
         is_dc = isinstance(it, _ComboItem) and it.is_dc if it else False
+        if self._show_quality:
+            self.combo_quality.blockSignals(True)
+            prev = self.combo_quality.currentText()
+            self.combo_quality.clear()
+            levels = ("H3", "H4") if is_dc else self._quality_levels
+            for ql in levels:
+                self.combo_quality.addItem(ql)
+            idx = self.combo_quality.findText(prev)
+            self.combo_quality.setCurrentIndex(idx if idx >= 0 else 0)
+            self.combo_quality.blockSignals(False)
         if self._show_price and it and not is_dc:
             self._unit_price = it.unit_price or 0.0
             self.lbl_price.setText(f"{self._unit_price:,.0f} đ" if self._unit_price else "—")
@@ -217,11 +227,7 @@ class IssueLineRow(QWidget):
             ql = self.combo_quality.currentText()
             is_dc = isinstance(it, _ComboItem) and it.is_dc
             if is_dc:
-                # DC items: sum across all quality levels (H1+H2+H3)
-                stock = sum(
-                    self._stock_map.get((it.id, q, True), 0)
-                    for q in ("H1", "H2", "H3")
-                )
+                stock = self._stock_map.get((it.id, ql, True), 0)
             else:
                 stock = self._stock_map.get((it.id, ql), 0)
         else:
@@ -663,7 +669,7 @@ class XuatKhoFormDialog(QDialog):
                 SELECT item_type_id, quality_level, SUM(quantity) AS qty
                 FROM inventory
                 WHERE warehouse_id = ? AND is_shared = 1
-                  AND quality_level IN ('H1','H2','H3') AND quantity > 0
+                  AND quality_level IN ('H3','H4') AND quantity > 0
                 GROUP BY item_type_id, quality_level
             """, (wh_id,)).fetchall()
             for r in dc_rows:
