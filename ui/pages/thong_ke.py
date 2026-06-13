@@ -911,8 +911,9 @@ class ThongKeSharedPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setStyleSheet("ThongKeSharedPage { background: #fafafa; }")
-        self._active_tab   = "ton"
-        self._active_wh_id: int | None = None
+        self._active_tab    = "ton"
+        self._active_wh_id:   int | None = None
+        self._active_unit_id: int | None = None
         self._raw_ton:    list = []
         self._raw_muon:   list = []
         self._raw_h4:     list = []
@@ -991,11 +992,7 @@ class ThongKeSharedPage(QWidget):
         self._muon_search.textChanged.connect(self._apply_filter)
         self._muon_search.setVisible(False)
 
-        self._wh_combo = QComboBox()
-        self._wh_combo.setFixedHeight(34)
-        self._wh_combo.setMinimumWidth(200)
-        self._wh_combo.setFont(QFont(FONT, 12))
-        self._wh_combo.setStyleSheet("""
+        _combo_style = """
             QComboBox { border: 1px solid #e0e0e0; border-radius: 8px;
                 padding: 0 32px 0 12px; background: white; color: #111; }
             QComboBox::drop-down { subcontrol-origin: padding;
@@ -1010,8 +1007,23 @@ class ThongKeSharedPage(QWidget):
             QComboBox QAbstractItemView { border: 1px solid #e0e0e0;
                 border-radius: 6px; background: white; color: #111;
                 selection-background-color: #f0f0f0; }
-        """)
+        """
+
+        self._wh_combo = QComboBox()
+        self._wh_combo.setFixedHeight(34)
+        self._wh_combo.setMinimumWidth(200)
+        self._wh_combo.setFont(QFont(FONT, 12))
+        self._wh_combo.setStyleSheet(_combo_style)
         self._wh_combo.currentIndexChanged.connect(self._on_wh_changed)
+
+        self._unit_combo = QComboBox()
+        self._unit_combo.setFixedHeight(34)
+        self._unit_combo.setMinimumWidth(200)
+        self._unit_combo.setFont(QFont(FONT, 12))
+        self._unit_combo.setStyleSheet(_combo_style)
+        self._unit_combo.currentIndexChanged.connect(self._on_unit_changed)
+        self._unit_combo.setVisible(False)
+
         root.addLayout(top)
         root.addSpacing(20)
 
@@ -1050,6 +1062,8 @@ class ThongKeSharedPage(QWidget):
             tab_h.addWidget(btn)
         tab_h.addStretch()
         tab_h.addWidget(self._muon_search)
+        tab_h.addSpacing(8)
+        tab_h.addWidget(self._unit_combo)
         tab_h.addSpacing(8)
         tab_h.addWidget(self._wh_combo)
         tab_h.addSpacing(8)
@@ -1116,7 +1130,8 @@ class ThongKeSharedPage(QWidget):
         self._smart_hdr._sasc = sa
         self._apply_tab_style()
         is_muon = (key == "muon")
-        self._wh_combo.setVisible(not is_muon)
+        self._wh_combo.setVisible(True)
+        self._unit_combo.setVisible(is_muon)
         self._search.setVisible(not is_muon)
         self._muon_search.setVisible(is_muon)
         if key == "ton":
@@ -1127,6 +1142,10 @@ class ThongKeSharedPage(QWidget):
 
     def _on_wh_changed(self, _):
         self._active_wh_id = self._wh_combo.currentData()
+        self._reload_data()
+
+    def _on_unit_changed(self, _):
+        self._active_unit_id = self._unit_combo.currentData()
         self._reload_data()
 
     def _on_nhap_moi(self):
@@ -1157,6 +1176,7 @@ class ThongKeSharedPage(QWidget):
 
     def refresh(self):
         self._reload_warehouses()
+        self._reload_units()
         self._reload_data()
 
     def _reload_warehouses(self):
@@ -1177,14 +1197,32 @@ class ThongKeSharedPage(QWidget):
         self._wh_combo.blockSignals(False)
         self._active_wh_id = self._wh_combo.currentData()
 
+    def _reload_units(self):
+        current = self._unit_combo.currentData()
+        self._unit_combo.blockSignals(True)
+        self._unit_combo.clear()
+        self._unit_combo.addItem("Tất cả đơn vị", None)
+        conn = database.get_conn()
+        for r in conn.execute(
+            "SELECT id, name FROM warehouses"
+            " WHERE type='DON_VI' AND is_active=1 ORDER BY name"
+        ).fetchall():
+            self._unit_combo.addItem(r["name"], r["id"])
+        for i in range(self._unit_combo.count()):
+            if self._unit_combo.itemData(i) == current:
+                self._unit_combo.setCurrentIndex(i)
+                break
+        self._unit_combo.blockSignals(False)
+        self._active_unit_id = self._unit_combo.currentData()
+
     def _reload_data(self):
         conn = database.get_conn()
-        wh_id  = self._active_wh_id
-        inv_f  = "AND i.warehouse_id = ?" if wh_id else ""
-        muon_f = "AND tx.from_warehouse_id = ?" if wh_id else ""
-        p = [wh_id] if wh_id else []
+        wh_id   = self._active_wh_id
+        unit_id = self._active_unit_id
 
-        # Tab 1: Tồn kho H3/H4
+        # Tab 1: Tồn kho H3/H4 (lọc theo kho)
+        inv_f = "AND i.warehouse_id = ?" if wh_id else ""
+        p_ton = [wh_id] if wh_id else []
         self._raw_ton = conn.execute(f"""
             SELECT t.id AS item_type_id, t.code AS item_code,
                    t.name AS item_name, t.unit_of_measure,
@@ -1194,9 +1232,18 @@ class ThongKeSharedPage(QWidget):
             JOIN item_types t ON t.id = i.item_type_id
             WHERE i.is_shared=1 AND i.quality_level IN ('H3','H4') {inv_f}
             GROUP BY t.id HAVING (h3 + h4) > 0 ORDER BY t.name
-        """, p).fetchall()
+        """, p_ton).fetchall()
 
-        # Tab 2: Đang cho mượn (giao dịch type MUON)
+        # Tab 2: Đang cho mượn (lọc theo kho xuất AND/OR đơn vị mượn)
+        muon_clauses = []
+        p_muon: list = []
+        if wh_id:
+            muon_clauses.append("tx.from_warehouse_id = ?")
+            p_muon.append(wh_id)
+        if unit_id:
+            muon_clauses.append("tx.to_warehouse_id = ?")
+            p_muon.append(unit_id)
+        muon_f = ("AND " + " AND ".join(muon_clauses)) if muon_clauses else ""
         self._raw_muon = conn.execute(f"""
             SELECT tx.transaction_date, tx.reference_number,
                    t.code AS item_code, t.name AS item_name, t.unit_of_measure,
@@ -1208,10 +1255,11 @@ class ThongKeSharedPage(QWidget):
             LEFT JOIN warehouses wto ON wto.id = tx.to_warehouse_id
             WHERE tx.type='MUON' {muon_f}
             ORDER BY tx.transaction_date DESC, tx.id DESC, tl.id
-        """, p).fetchall()
+        """, p_muon).fetchall()
 
-        # Tab 3: Phiếu chuyển H4
-        h4_f = "AND tx.to_warehouse_id = ?" if wh_id else ""
+        # Tab 3: Phiếu chuyển H4 (lọc theo kho)
+        h4_f  = "AND tx.to_warehouse_id = ?" if wh_id else ""
+        p_h4  = [wh_id] if wh_id else []
         self._raw_h4 = conn.execute(f"""
             SELECT tx.id, tx.reference_number, tx.transaction_date,
                    w.name AS wh_name,
@@ -1222,7 +1270,7 @@ class ThongKeSharedPage(QWidget):
             WHERE tx.type='CHUYEN_H4' {h4_f}
             GROUP BY tx.id
             ORDER BY tx.transaction_date DESC, tx.id DESC
-        """, p).fetchall()
+        """, p_h4).fetchall()
 
         h3_total = sum(r["h3"] for r in self._raw_ton)
         h4_total = sum(r["h4"] for r in self._raw_ton)

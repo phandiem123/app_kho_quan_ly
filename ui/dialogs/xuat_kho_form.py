@@ -216,8 +216,14 @@ class IssueLineRow(QWidget):
         if self._show_quality:
             ql = self.combo_quality.currentText()
             is_dc = isinstance(it, _ComboItem) and it.is_dc
-            key = (it.id, ql, True) if is_dc else (it.id, ql)
-            stock = self._stock_map.get(key, 0)
+            if is_dc:
+                # DC items: sum across all quality levels (H1+H2+H3)
+                stock = sum(
+                    self._stock_map.get((it.id, q, True), 0)
+                    for q in ("H1", "H2", "H3")
+                )
+            else:
+                stock = self._stock_map.get((it.id, ql), 0)
         else:
             stock = self._stock_map.get(it.id, 0)
 

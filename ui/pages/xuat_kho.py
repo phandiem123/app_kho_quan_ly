@@ -415,8 +415,8 @@ class DetailPanel(QWidget):
             QMessageBox.warning(self, "Lỗi", f"Không thể lưu file:\n{e}")
 
     def _export_word(self):
-        from ui.word_export import export_xuat_kho
-        export_xuat_kho(self, self._issue, self._lines)
+        from ui.word_export import export_xuat_kho_excel
+        export_xuat_kho_excel(self, self._issue, self._lines)
 
 
 # ── Main Page ─────────────────────────────────────────────────────────────────

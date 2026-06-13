@@ -586,6 +586,198 @@ def export_xuat_kho(parent, issue, lines) -> None:
     QMessageBox.information(parent, "Xuất Word", f"Đã lưu:\n{path}")
 
 
+def export_xuat_kho_excel(parent, issue, lines) -> None:
+    """Xuất phiếu xuất kho (đi đơn vị) ra Excel theo mẫu chuẩn."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+    except ImportError:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(parent, "Lỗi", "Cần cài openpyxl:\npip install openpyxl")
+        return
+
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+    from datetime import datetime, timedelta
+
+    path, _ = QFileDialog.getSaveFileName(
+        parent, "Lưu Phiếu Xuất Kho",
+        f"PhieuXuatKho_{issue.reference_number or 'export'}.xlsx",
+        "Excel Files (*.xlsx)",
+    )
+    if not path:
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Phiếu Xuất Kho"
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.paperSize = 9  # A4
+
+    TN = "Times New Roman"
+    thin = Side(style="thin", color="000000")
+    bdr  = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    def aln(h="left", v="center", wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+
+    def sh(row, height):
+        ws.row_dimensions[row].height = height
+
+    for col, w in [("A", 5), ("B", 28), ("C", 7), ("D", 10), ("E", 10),
+                   ("F", 12), ("G", 14), ("H", 18)]:
+        ws.column_dimensions[col].width = w
+
+    # ── Row 1: QUÂN KHU 5 | Số phiếu ────────────────────────────────────────
+    sh(1, 18)
+    ws.merge_cells("A1:B1")
+    ws["A1"].value = "QUÂN KHU 5"
+    ws["A1"].font = Font(name=TN, size=11)
+    ws["A1"].alignment = aln("center")
+    ws.merge_cells("G1:H1")
+    ws["G1"].value = f"Số phiếu: {issue.reference_number or ''}"
+    ws["G1"].font = Font(name=TN, size=11)
+    ws["G1"].alignment = aln("right")
+
+    # ── Row 2: CỤC HẬU CẦN – KỸ THUẬT | PHIẾU XUẤT KHO ─────────────────────
+    sh(2, 26)
+    ws.merge_cells("A2:B2")
+    ws["A2"].value = "CỤC HẬU CẦN – KỸ THUẬT"
+    ws["A2"].font = Font(name=TN, size=11, bold=True, underline="single")
+    ws["A2"].alignment = aln("center")
+    ws.merge_cells("C2:F2")
+    ws["C2"].value = "PHIẾU XUẤT KHO"
+    ws["C2"].font = Font(name=TN, size=16, bold=True)
+    ws["C2"].alignment = aln("center")
+
+    # ── Row 3: blank ──────────────────────────────────────────────────────────
+    sh(3, 8)
+
+    # ── Rows 4-7: info block ─────────────────────────────────────────────────
+    # "Có giá trị đến ngày" = transaction_date + 60 ngày
+    try:
+        tx_dt = datetime.strptime(issue.transaction_date, "%Y-%m-%d")
+        valid_until = (tx_dt + timedelta(days=60)).strftime("%d/%m/%Y")
+    except Exception:
+        valid_until = ""
+
+    left_info = [
+        f"Nội dung xuất: {issue.notes or ''}",
+        f"Kho giao hàng: {issue.from_warehouse_name or ''}",
+        f"Người nhận: {issue.recipient or ''}",
+        f"Hàng do: {issue.transporter or ''}",
+    ]
+    right_info = [
+        f"Đơn vị nhận: {issue.to_warehouse_name or ''}",
+        f"Có giá trị đến ngày: {valid_until}",
+        "",
+        "",
+    ]
+    for ri, (ltext, rtext) in enumerate(zip(left_info, right_info), start=4):
+        sh(ri, 18)
+        ws.merge_cells(f"A{ri}:D{ri}")
+        c = ws.cell(row=ri, column=1, value=ltext)
+        c.font = Font(name=TN, size=11); c.alignment = aln("left")
+        if rtext:
+            ws.merge_cells(f"E{ri}:H{ri}")
+            c = ws.cell(row=ri, column=5, value=rtext)
+            c.font = Font(name=TN, size=11); c.alignment = aln("left")
+
+    # ── Row 8: blank ──────────────────────────────────────────────────────────
+    sh(8, 8)
+
+    # ── Rows 9-10: table header ───────────────────────────────────────────────
+    hf   = Font(name=TN, size=11, bold=True)
+    ha   = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    hfill = PatternFill("solid", fgColor="F2F2F2")
+    sh(9, 22); sh(10, 20)
+    for ci, val in enumerate(["TT","Tên hàng","ĐVT","Số lượng","","Đơn giá","Thành tiền","Ghi chú"], 1):
+        c = ws.cell(row=9, column=ci, value=val)
+        c.font = hf; c.alignment = ha; c.border = bdr; c.fill = hfill
+    for ci, val in enumerate(["","","","Kế hoạch","Thực hiện","","",""], 1):
+        c = ws.cell(row=10, column=ci, value=val)
+        c.font = hf; c.alignment = ha; c.border = bdr; c.fill = hfill
+    ws.merge_cells("A9:A10"); ws.merge_cells("B9:B10"); ws.merge_cells("C9:C10")
+    ws.merge_cells("D9:E9")
+    ws.merge_cells("F9:F10"); ws.merge_cells("G9:G10"); ws.merge_cells("H9:H10")
+
+    # ── Data rows ─────────────────────────────────────────────────────────────
+    grand_total = 0.0
+    DR = 11
+    for i, line in enumerate(lines):
+        r = DR + i
+        sh(r, 20)
+        is_dc   = getattr(line, "is_shared", False)
+        name    = f"{line.item_name} (DC)" if is_dc else line.item_name
+        if is_dc:
+            price = 0.0; lt = 0.0
+        else:
+            price = getattr(line, "unit_price", 0.0) or 0.0
+            lt    = line.quantity * price
+            grand_total += lt
+
+        vals = [i + 1, name, line.unit_of_measure, line.quantity, "",
+                price if (price and not is_dc) else "",
+                lt    if (lt    and not is_dc) else "",
+                getattr(line, "notes", "") or ""]
+        alns = [aln("center"), aln("left"), aln("center"), aln("center"), aln("center"),
+                aln("right"), aln("right"), aln("left")]
+        for ci, (val, al) in enumerate(zip(vals, alns), 1):
+            c = ws.cell(row=r, column=ci, value=val)
+            c.font = Font(name=TN, size=11); c.alignment = al; c.border = bdr
+            if ci in (6, 7) and isinstance(val, (int, float)) and val:
+                c.number_format = "#,##0"
+
+    # ── Tổng cộng row ─────────────────────────────────────────────────────────
+    tr = DR + len(lines)
+    sh(tr, 22)
+    ws.merge_cells(f"A{tr}:F{tr}")
+    c = ws.cell(row=tr, column=1, value="Tổng cộng")
+    c.font = Font(name=TN, size=11, bold=True); c.alignment = aln("center"); c.border = bdr
+    c = ws.cell(row=tr, column=7, value=grand_total if grand_total else "")
+    c.font = Font(name=TN, size=11, bold=True); c.alignment = aln("right"); c.border = bdr
+    if grand_total:
+        c.number_format = "#,##0"
+    ws.cell(row=tr, column=8).border = bdr
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    f1 = tr + 1; sh(f1, 18)
+    ws.merge_cells(f"A{f1}:H{f1}")
+    c = ws.cell(row=f1, column=1, value=f"Tổng: {len(lines):02d} Khoản")
+    c.font = Font(name=TN, size=11); c.alignment = aln("left")
+
+    f2 = tr + 2; sh(f2, 18)
+    ws.merge_cells(f"A{f2}:H{f2}")
+    c = ws.cell(row=f2, column=1,
+                value=f"Thành tiền: {so_thanh_chu(int(grand_total))}.")
+    c.font = Font(name=TN, size=11); c.alignment = aln("left")
+
+    dy, mo, yr = _parse_date(issue.transaction_date or "")
+    dr = tr + 3; sh(dr, 18)
+    ws.merge_cells(f"E{dr}:H{dr}")
+    c = ws.cell(row=dr, column=5,
+                value=f"Ngày {dy}  tháng {mo}  năm {yr}")
+    c.font = Font(name=TN, size=11, italic=True); c.alignment = aln("center")
+
+    sh(dr + 1, 14)
+
+    sr = dr + 2; sh(sr, 18)
+    sigs = [("A", "A", "NGƯỜI LẬP PHIẾU"), ("B", "C", "NGƯỜI GIAO"),
+            ("D", "E", "NGƯỜI NHẬN"), ("F", "G", "PHÒNG QUÂN NHU"), ("H", "H", "THỦ TRƯỞNG")]
+    for cs, ce, label in sigs:
+        if cs != ce:
+            ws.merge_cells(f"{cs}{sr}:{ce}{sr}")
+        ci = ord(cs) - ord("A") + 1
+        c = ws.cell(row=sr, column=ci, value=label)
+        c.font = Font(name=TN, size=11, bold=True); c.alignment = aln("center")
+
+    try:
+        wb.save(path)
+        QMessageBox.information(parent, "Xuất Excel",
+                                f"Đã lưu phiếu xuất kho:\n{path}")
+    except Exception as exc:
+        QMessageBox.warning(parent, "Lỗi", f"Không thể lưu file:\n{exc}")
+
+
 def export_dieu_chinh(parent, transfer, lines) -> None:
     if not _ensure_docx(parent):
         return
