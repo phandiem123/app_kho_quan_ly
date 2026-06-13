@@ -110,9 +110,10 @@ class _LineRow(QWidget):
 
 
 class ChuyenH4FormDialog(QDialog):
-    def __init__(self, parent=None, tx_id: int | None = None):
+    def __init__(self, parent=None, tx_id: int | None = None, wh_id: int | None = None):
         super().__init__(parent)
         self._tx_id = tx_id
+        self._init_wh_id = wh_id
         title = "Sửa – Phiếu Chuyển Sang H4" if tx_id else "Phiếu Chuyển Sang H4"
         self.setWindowTitle(title)
         self.setModal(True)
@@ -325,8 +326,18 @@ class ChuyenH4FormDialog(QDialog):
                     row.spin_qty.setValue(tl["quantity"])
                     self._line_rows.append(row)
                     self._lines_v.insertWidget(self._lines_v.count() - 1, row)
-        elif self._wh_combo.count():
-            self._wh_id = self._wh_combo.itemData(0)
+        else:
+            # pre-select the warehouse passed from the caller (if any)
+            target = self._init_wh_id
+            self._wh_combo.blockSignals(True)
+            if target:
+                for i in range(self._wh_combo.count()):
+                    if self._wh_combo.itemData(i) == target:
+                        self._wh_combo.setCurrentIndex(i)
+                        break
+            self._wh_combo.blockSignals(False)
+            if self._wh_combo.count():
+                self._wh_id = self._wh_combo.currentData()
             self._add_line()
 
     def _load_items(self):

@@ -1046,7 +1046,7 @@ class ThongKeSharedPage(QWidget):
 
     def _on_chuyen_h4(self):
         from ui.dialogs.chuyen_h4_form import ChuyenH4FormDialog
-        dlg = ChuyenH4FormDialog(self)
+        dlg = ChuyenH4FormDialog(self, wh_id=self._active_wh_id)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
