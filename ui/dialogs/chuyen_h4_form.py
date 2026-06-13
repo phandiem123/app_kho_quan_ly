@@ -347,6 +347,18 @@ class ChuyenH4FormDialog(QDialog):
         ).fetchall()
         self._items = [{"id": r["id"], "code": r["code"], "name": r["name"]} for r in rows]
 
+    def _h3_items(self, wh_id: int) -> list[dict]:
+        """Return only items with H3 shared inventory > 0 for the given warehouse."""
+        conn = database.get_conn()
+        rows = conn.execute("""
+            SELECT DISTINCT t.id, t.code, t.name
+            FROM inventory i
+            JOIN item_types t ON t.id = i.item_type_id
+            WHERE i.warehouse_id=? AND i.quality_level='H3' AND i.is_shared=1 AND i.quantity > 0
+            ORDER BY t.name
+        """, (wh_id,)).fetchall()
+        return [{"id": r["id"], "code": r["code"], "name": r["name"]} for r in rows]
+
     def _on_wh_changed(self, idx: int):
         self._wh_id = self._wh_combo.itemData(idx)
         for row in list(self._line_rows):
@@ -356,9 +368,10 @@ class ChuyenH4FormDialog(QDialog):
         self._add_line()
 
     def _add_line(self):
-        if not self._items:
+        items = self._h3_items(self._wh_id) if self._wh_id else self._items
+        if not items:
             return
-        row = _LineRow(self._items, self._wh_id, self._lines_w)
+        row = _LineRow(items, self._wh_id, self._lines_w)
         row.remove_requested.connect(self._remove_line)
         self._line_rows.append(row)
         self._lines_v.insertWidget(self._lines_v.count() - 1, row)
