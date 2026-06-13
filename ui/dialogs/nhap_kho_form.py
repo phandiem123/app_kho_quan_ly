@@ -36,11 +36,12 @@ _SPIN = """
 """
 
 _TITLES = {
-    "new":           "Nhập Hàng Mới",
-    "from_unit":     "Nhập Hàng Từ Đơn Vị Về",
-    "unit_return":   "Nhận Hàng Dùng Chung – Đơn Vị Trả",
-    "event_return":  "Nhận Hàng Dùng Chung – Sự Kiện Trả",
-    "shared_return": "Nhận Hàng Dùng Chung Về",  # backwards-compat
+    "new":            "Nhập Hàng Mới",
+    "from_unit":      "Nhập Hàng Từ Đơn Vị Về",
+    "unit_return":    "Nhận Hàng Dùng Chung – Đơn Vị Trả",
+    "event_return":   "Nhận Hàng Dùng Chung – Sự Kiện Trả",
+    "shared_return":  "Nhận Hàng Dùng Chung Về",
+    "shared_from_wh": "Nhập Hàng Dùng Chung Từ Kho",
 }
 
 
@@ -337,6 +338,8 @@ class NhapKhoFormDialog(QDialog):
         }.get(self._subtype, "")
         self.f_from_wh = combo_wh(self._don_vi)
 
+        self.f_src_wh = combo_wh(self._tong)  # kho nguồn cho shared_from_wh
+
         self.f_notes = QTextEdit()
         self.f_notes.setPlaceholderText("Nội dung nhập kho (tuỳ chọn)")
         self.f_notes.setFont(QFont(FONT, 12))
@@ -344,8 +347,8 @@ class NhapKhoFormDialog(QDialog):
         self.f_notes.setStyleSheet(_FIELD)
 
         self._shared_source = "unit_return"
-        self._btn_unit_src = self._btn_event_src = None
-        self._lbl_unit_src = self._lbl_event_src = None
+        self._btn_unit_src = self._btn_event_src = self._btn_wh_src = None
+        self._lbl_unit_src = self._lbl_event_src = self._lbl_wh_src = None
         self._loan_tx_id: int | None = None
         # Loan-item restriction (for return subtypes)
         self._loan_item_types_filtered: list = []
@@ -388,22 +391,29 @@ class NhapKhoFormDialog(QDialog):
             tgl_h = QHBoxLayout(tgl_w)
             tgl_h.setContentsMargins(3, 3, 3, 3)
             tgl_h.setSpacing(2)
-            self._btn_unit_src = QPushButton("Đơn Vị Trả Về")
+            self._btn_unit_src  = QPushButton("Đơn Vị Trả Về")
             self._btn_event_src = QPushButton("Sự Kiện")
-            for _b in (self._btn_unit_src, self._btn_event_src):
+            self._btn_wh_src    = QPushButton("Từ Kho")
+            for _b in (self._btn_unit_src, self._btn_event_src, self._btn_wh_src):
                 _b.setFont(QFont(FONT, 11))
                 _b.setFixedHeight(26)
                 _b.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                 tgl_h.addWidget(_b)
             self._btn_unit_src.clicked.connect(lambda: self._set_shared_source("unit_return"))
             self._btn_event_src.clicked.connect(lambda: self._set_shared_source("event_return"))
+            self._btn_wh_src.clicked.connect(lambda: self._set_shared_source("warehouse"))
             col_b.addRow(lbl("Nguồn Trả *"), tgl_w)
-            self._lbl_unit_src = lbl("Đơn Vị Trả *")
+            self._lbl_unit_src  = lbl("Đơn Vị Trả *")
             self._lbl_event_src = lbl("Tên Sự Kiện *")
+            self._lbl_wh_src    = lbl("Kho Nguồn *")
             col_b.addRow(self._lbl_unit_src, self.f_from_wh)
             col_b.addRow(self._lbl_event_src, self.f_event_combo)
+            col_b.addRow(self._lbl_wh_src, self.f_src_wh)
             self.f_event_combo.setVisible(False)
             self._lbl_event_src.setVisible(False)
+            self.f_src_wh.setVisible(False)
+            self._lbl_wh_src.setVisible(False)
+            self.f_src_wh.currentIndexChanged.connect(self._on_src_wh_changed)
             self._update_source_toggle_style()
         else:
             col_b.addRow(lbl(self._from_label), self.f_from_wh)
@@ -585,19 +595,30 @@ class NhapKhoFormDialog(QDialog):
         self._btn_event_src.setStyleSheet(
             active if self._shared_source == "event_return" else inactive
         )
+        if self._btn_wh_src:
+            self._btn_wh_src.setStyleSheet(
+                active if self._shared_source == "warehouse" else inactive
+            )
 
     def _set_shared_source(self, source_type: str):
         self._shared_source = source_type
-        is_unit = source_type == "unit_return"
+        is_unit  = (source_type == "unit_return")
+        is_event = (source_type == "event_return")
+        is_wh    = (source_type == "warehouse")
         if self._lbl_unit_src:
             self._lbl_unit_src.setVisible(is_unit)
             self.f_from_wh.setVisible(is_unit)
         if self._lbl_event_src:
-            self._lbl_event_src.setVisible(not is_unit)
-            self.f_event_combo.setVisible(not is_unit)
+            self._lbl_event_src.setVisible(is_event)
+            self.f_event_combo.setVisible(is_event)
+        if self._lbl_wh_src:
+            self._lbl_wh_src.setVisible(is_wh)
+            self.f_src_wh.setVisible(is_wh)
         self._update_source_toggle_style()
         if not self._editing:
             self._clear_rows()
+            if is_wh:
+                self._reload_wh_items()
 
     def _on_event_combo_changed(self, _):
         self._loan_tx_id = self.f_event_combo.currentData()
@@ -653,6 +674,8 @@ class NhapKhoFormDialog(QDialog):
                 if not loan_tx_id:
                     return []
                 return get_loan_items_remaining(loan_tx_id)
+            elif self._shared_source == "warehouse":
+                return []
             else:
                 unit_wh_id = self.f_from_wh.currentData()
                 tong_wh_id = self.f_wh.currentData()
@@ -660,6 +683,33 @@ class NhapKhoFormDialog(QDialog):
                     return []
                 return get_unit_loan_items_remaining(unit_wh_id, tong_wh_id)
         return []
+
+    def _on_src_wh_changed(self, _):
+        if not self._editing and self._shared_source == "warehouse":
+            self._reload_wh_items()
+
+    def _reload_wh_items(self):
+        """Load available items from the source warehouse for shared_from_wh source."""
+        import database
+        wh_id = self.f_src_wh.currentData()
+        self._clear_rows()
+        if not wh_id:
+            self._loan_item_types_filtered = []
+            self._loan_max_qty_map = {}
+            return
+        conn = database.get_conn()
+        rows = conn.execute("""
+            SELECT it.id, SUM(i.quantity) AS total_qty
+            FROM inventory i
+            JOIN item_types it ON it.id = i.item_type_id
+            WHERE i.warehouse_id=? AND i.is_shared=0 AND i.quantity > 0
+            GROUP BY it.id HAVING total_qty > 0 ORDER BY it.name
+        """, (wh_id,)).fetchall()
+        self._loan_max_qty_map = {r["id"]: int(r["total_qty"]) for r in rows}
+        item_ids = {r["id"] for r in rows}
+        self._loan_item_types_filtered = [it for it in self._item_types if it.id in item_ids]
+        if self._loan_item_types_filtered:
+            self._add_line()
 
     def _add_loan_item_row(self, item_data: dict):
         """Add a pre-filled row locked to one loan item with capped quantity."""
@@ -845,6 +895,10 @@ class NhapKhoFormDialog(QDialog):
                 from_wh_id = self.f_from_wh.currentData()
                 if not from_wh_id:
                     return self._err("Vui lòng chọn Đơn Vị Trả.")
+            elif self._shared_source == "warehouse":
+                from_wh_id = self.f_src_wh.currentData()
+                if not from_wh_id:
+                    return self._err("Vui lòng chọn Kho Nguồn.")
             else:
                 loan_tx_id = self.f_event_combo.currentData()
                 if not loan_tx_id:
@@ -885,7 +939,10 @@ class NhapKhoFormDialog(QDialog):
             lines=lines,
         )
         if self._subtype in ("unit_return", "event_return", "shared_return"):
-            receipt.tx_type = "TRA"
+            if self._subtype == "shared_return" and self._shared_source == "warehouse":
+                receipt.tx_type = "NHAP_DC_TU_KHO"
+            else:
+                receipt.tx_type = "TRA"
 
         if self._editing:
             update(receipt)

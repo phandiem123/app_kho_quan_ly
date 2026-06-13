@@ -52,13 +52,6 @@ class _LineRow(QWidget):
             self.combo_item.addItem(it["name"], it)
         self.combo_item.currentIndexChanged.connect(self._refresh_available)
 
-        self.combo_ql = QComboBox()
-        self.combo_ql.setFixedSize(76, 34)
-        self.combo_ql.setStyleSheet(_FIELD)
-        for ql in ("H1", "H2", "H3"):
-            self.combo_ql.addItem(ql, ql)
-        self.combo_ql.currentIndexChanged.connect(self._refresh_available)
-
         self.lbl_avail = QLabel("0")
         self.lbl_avail.setFixedSize(70, 34)
         self.lbl_avail.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -84,7 +77,6 @@ class _LineRow(QWidget):
         btn_rm.clicked.connect(lambda: self.remove_requested.emit(self))
 
         h.addWidget(self.combo_item, 1)
-        h.addWidget(self.combo_ql)
         h.addWidget(self.lbl_avail)
         h.addWidget(self.spin_qty)
         h.addWidget(btn_rm)
@@ -93,36 +85,36 @@ class _LineRow(QWidget):
 
     def _refresh_available(self):
         it = self.combo_item.currentData()
-        ql = self.combo_ql.currentData()
-        if not it or not ql or not self._wh_id:
+        if not it or not self._wh_id:
             self.lbl_avail.setText("0")
             return
         conn = database.get_conn()
         row = conn.execute("""
             SELECT COALESCE(SUM(quantity), 0) AS qty
             FROM inventory
-            WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=1
-        """, (self._wh_id, it["id"], ql)).fetchone()
+            WHERE warehouse_id=? AND item_type_id=? AND quality_level='H3' AND is_shared=1
+        """, (self._wh_id, it["id"])).fetchone()
         avail = row["qty"] if row else 0
         self.lbl_avail.setText(str(avail))
         self.spin_qty.setMaximum(max(1, avail) if avail > 0 else 1)
 
     def get_line(self) -> dict:
         it = self.combo_item.currentData()
-        ql = self.combo_ql.currentData()
         return {
             "item_type_id": it["id"],
             "item_name": it["name"],
-            "from_ql": ql,
+            "from_ql": "H3",
             "quantity": self.spin_qty.value(),
             "available": int(self.lbl_avail.text()),
         }
 
 
 class ChuyenH4FormDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, tx_id: int | None = None):
         super().__init__(parent)
-        self.setWindowTitle("Phiếu Chuyển Sang H4")
+        self._tx_id = tx_id
+        title = "Sửa – Phiếu Chuyển Sang H4" if tx_id else "Phiếu Chuyển Sang H4"
+        self.setWindowTitle(title)
         self.setModal(True)
         self.setMinimumWidth(680)
         self.setStyleSheet("QDialog { background: white; }")
@@ -196,8 +188,7 @@ class ChuyenH4FormDialog(QDialog):
         ch.setSpacing(6)
         for txt, stretch, fixw in [
             ("Mặt hàng", 1, None),
-            ("Chất lượng từ", 0, 76),
-            ("Tồn kho", 0, 70),
+            ("Tồn kho H3", 0, 70),
             ("Số lượng", 0, 90),
             ("", 0, 30),
         ]:
@@ -304,7 +295,37 @@ class ChuyenH4FormDialog(QDialog):
             self._wh_combo.addItem(r["name"], r["id"])
         self._wh_combo.blockSignals(False)
         self._load_items()
-        if self._wh_combo.count():
+
+        if self._tx_id:
+            tx = conn.execute(
+                "SELECT to_warehouse_id, reference_number, transaction_date"
+                " FROM transactions WHERE id=?", (self._tx_id,)
+            ).fetchone()
+            if tx:
+                for i in range(self._wh_combo.count()):
+                    if self._wh_combo.itemData(i) == tx["to_warehouse_id"]:
+                        self._wh_combo.setCurrentIndex(i)
+                        break
+                self._wh_id = tx["to_warehouse_id"]
+                self._ref.setText(tx["reference_number"] or "")
+                if tx["transaction_date"]:
+                    from PyQt6.QtCore import QDate
+                    self._date.setDate(QDate.fromString(tx["transaction_date"], "yyyy-MM-dd"))
+                tl_rows = conn.execute(
+                    "SELECT item_type_id, quantity FROM transaction_lines"
+                    " WHERE transaction_id=?", (self._tx_id,)
+                ).fetchall()
+                for tl in tl_rows:
+                    row = _LineRow(self._items, self._wh_id, self._lines_w)
+                    row.remove_requested.connect(self._remove_line)
+                    for j in range(row.combo_item.count()):
+                        if row.combo_item.itemData(j)["id"] == tl["item_type_id"]:
+                            row.combo_item.setCurrentIndex(j)
+                            break
+                    row.spin_qty.setValue(tl["quantity"])
+                    self._line_rows.append(row)
+                    self._lines_v.insertWidget(self._lines_v.count() - 1, row)
+        elif self._wh_combo.count():
             self._wh_id = self._wh_combo.itemData(0)
             self._add_line()
 
@@ -348,33 +369,75 @@ class ChuyenH4FormDialog(QDialog):
             return
 
         lines = [row.get_line() for row in self._line_rows]
+        conn = database.get_conn()
+
+        # For edit mode: compute old quantities per item to adjust available check
+        old_qty_by_item: dict[int, int] = {}
+        old_wh_id = self._wh_id
+        if self._tx_id:
+            old_tx = conn.execute(
+                "SELECT to_warehouse_id FROM transactions WHERE id=?", (self._tx_id,)
+            ).fetchone()
+            if old_tx:
+                old_wh_id = old_tx["to_warehouse_id"]
+            for ol in conn.execute(
+                "SELECT item_type_id, quantity FROM transaction_lines WHERE transaction_id=?",
+                (self._tx_id,)
+            ).fetchall():
+                old_qty_by_item[ol["item_type_id"]] = (
+                    old_qty_by_item.get(ol["item_type_id"], 0) + ol["quantity"]
+                )
+
         for line in lines:
-            if line["available"] <= 0:
+            old_bonus = old_qty_by_item.get(line["item_type_id"], 0) if self._tx_id else 0
+            effective_avail = line["available"] + old_bonus
+            if effective_avail <= 0:
                 QMessageBox.warning(
                     self, "Lỗi",
                     f"Mặt hàng '{line['item_name']}' ({line['from_ql']}) "
                     f"không còn tồn kho."
                 )
                 return
-            if line["quantity"] > line["available"]:
+            if line["quantity"] > effective_avail:
                 QMessageBox.warning(
                     self, "Lỗi",
                     f"Mặt hàng '{line['item_name']}' ({line['from_ql']}): "
                     f"Số lượng chuyển ({line['quantity']}) vượt quá "
-                    f"tồn kho ({line['available']})."
+                    f"tồn kho ({effective_avail})."
                 )
                 return
 
         ref = self._ref.text().strip() or None
         tx_date = self._date.date().toString("yyyy-MM-dd")
 
-        conn = database.get_conn()
-        cur = conn.execute("""
-            INSERT INTO transactions
-                (type, reference_number, to_warehouse_id, transaction_date, notes)
-            VALUES ('CHUYEN_H4', ?, ?, ?, '')
-        """, (ref, self._wh_id, tx_date))
-        tx_id = cur.lastrowid
+        if self._tx_id:
+            # rollback old inventory changes
+            for ol in conn.execute(
+                "SELECT item_type_id, quality_level_from, quantity"
+                " FROM transaction_lines WHERE transaction_id=?", (self._tx_id,)
+            ).fetchall():
+                conn.execute("""
+                    UPDATE inventory SET quantity=quantity+?
+                    WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=1
+                """, (ol["quantity"], old_wh_id, ol["item_type_id"], ol["quality_level_from"]))
+                conn.execute("""
+                    UPDATE inventory SET quantity=MAX(0, quantity-?)
+                    WHERE warehouse_id=? AND item_type_id=? AND quality_level='H4' AND is_shared=1
+                """, (ol["quantity"], old_wh_id, ol["item_type_id"]))
+            conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (self._tx_id,))
+            conn.execute("""
+                UPDATE transactions
+                SET reference_number=?, to_warehouse_id=?, transaction_date=?
+                WHERE id=?
+            """, (ref, self._wh_id, tx_date, self._tx_id))
+            tx_id = self._tx_id
+        else:
+            cur = conn.execute("""
+                INSERT INTO transactions
+                    (type, reference_number, to_warehouse_id, transaction_date, notes)
+                VALUES ('CHUYEN_H4', ?, ?, ?, '')
+            """, (ref, self._wh_id, tx_date))
+            tx_id = cur.lastrowid
 
         for line in lines:
             conn.execute("""

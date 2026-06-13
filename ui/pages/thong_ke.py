@@ -780,13 +780,15 @@ class ThongKePage(QWidget):
 class ThongKeSharedPage(QWidget):
     """Hàng dùng chung – tồn kho (H1–H3), đang cho mượn, chờ thanh xử lý (H4)."""
 
-    _COLS_TON  = ["STT", "Tên Hàng", "ĐVT", "H3", "H4"]
-    _COLS_MUON = ["STT", "Số Phiếu", "Ngày Mượn", "Tên Hàng",
-                  "ĐVT", "Số Lượng", "Đơn Vị / Người Mượn"]
+    _COLS_TON   = ["STT", "Tên Hàng", "ĐVT", "H3", "H4"]
+    _COLS_MUON  = ["STT", "Số Phiếu", "Ngày Mượn", "Tên Hàng",
+                   "ĐVT", "Số Lượng", "Đơn Vị / Người Mượn"]
+    _COLS_H4    = ["STT", "Số Phiếu", "Ngày", "Kho", "Số M.Hàng"]
 
     _TABS = [
-        ("ton",  "Tồn Kho"),
-        ("muon", "Đang Cho Mượn"),
+        ("ton",      "Tồn Kho"),
+        ("muon",     "Đang Cho Mượn"),
+        ("phieu_h4", "Phiếu Chuyển H4"),
     ]
 
     _SORT_KEYS: dict[str, dict] = {
@@ -804,6 +806,12 @@ class ThongKeSharedPage(QWidget):
             5: lambda r: r["quantity"],
             6: lambda r: (r["borrower"] or "").lower(),
         },
+        "phieu_h4": {
+            1: lambda r: (r["reference_number"] or "").lower(),
+            2: lambda r: r["transaction_date"] or "",
+            3: lambda r: (r["wh_name"] or "").lower(),
+            4: lambda r: r["line_count"],
+        },
     }
 
     def __init__(self):
@@ -811,10 +819,11 @@ class ThongKeSharedPage(QWidget):
         self.setStyleSheet("ThongKeSharedPage { background: #fafafa; }")
         self._active_tab   = "ton"
         self._active_wh_id: int | None = None
-        self._raw_ton:  list = []
-        self._raw_muon: list = []
+        self._raw_ton:    list = []
+        self._raw_muon:   list = []
+        self._raw_h4:     list = []
         self._sort: dict[str, tuple[int, bool]] = {
-            "ton": (-1, True), "muon": (-1, True),
+            "ton": (-1, True), "muon": (-1, True), "phieu_h4": (-1, True),
         }
         self._build_ui()
 
@@ -837,7 +846,7 @@ class ThongKeSharedPage(QWidget):
                 font-size: 12px; font-weight: 600; background: #f5f5f5; color: #444; }
             QPushButton:hover { background: #e8e8e8; }
         """
-        btn_nhan_sk = QPushButton("Nhận Từ Sự Kiện")
+        btn_nhan_sk = QPushButton("Nhập Hàng Dùng Chung")
         btn_nhan_sk.setFixedHeight(34)
         btn_nhan_sk.setFont(QFont(FONT, 12, QFont.Weight.Bold))
         btn_nhan_sk.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -978,6 +987,9 @@ class ThongKeSharedPage(QWidget):
         self._table.setStyleSheet(_TABLE_STYLE)
         self._smart_hdr.sortRequested.connect(self._on_sort)
         self._smart_hdr.visToggled.connect(self._vis_btn.on_vis_toggled)
+        self._table.cellDoubleClicked.connect(self._on_table_double_click)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_table_context_menu)
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
 
@@ -1010,6 +1022,10 @@ class ThongKeSharedPage(QWidget):
         self._wh_combo.setVisible(not is_muon)
         self._search.setVisible(not is_muon)
         self._muon_search.setVisible(is_muon)
+        if key == "ton":
+            self._search.setPlaceholderText("Tìm mặt hàng...")
+        elif key == "phieu_h4":
+            self._search.setPlaceholderText("Tìm số phiếu / kho...")
         self._apply_filter()
 
     def _on_wh_changed(self, _):
@@ -1024,7 +1040,7 @@ class ThongKeSharedPage(QWidget):
 
     def _on_nhan_tu_su_kien(self):
         from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
-        dlg = NhapKhoFormDialog(self, subtype="event_return")
+        dlg = NhapKhoFormDialog(self, subtype="shared_return")
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
@@ -1097,6 +1113,20 @@ class ThongKeSharedPage(QWidget):
             ORDER BY tx.transaction_date DESC, tx.id DESC, tl.id
         """, p).fetchall()
 
+        # Tab 3: Phiếu chuyển H4
+        h4_f = "AND tx.to_warehouse_id = ?" if wh_id else ""
+        self._raw_h4 = conn.execute(f"""
+            SELECT tx.id, tx.reference_number, tx.transaction_date,
+                   w.name AS wh_name,
+                   COUNT(tl.id) AS line_count
+            FROM transactions tx
+            JOIN warehouses w ON w.id = tx.to_warehouse_id
+            JOIN transaction_lines tl ON tl.transaction_id = tx.id
+            WHERE tx.type='CHUYEN_H4' {h4_f}
+            GROUP BY tx.id
+            ORDER BY tx.transaction_date DESC, tx.id DESC
+        """, p).fetchall()
+
         h3_total = sum(r["h3"] for r in self._raw_ton)
         h4_total = sum(r["h4"] for r in self._raw_ton)
         muon     = sum(r["quantity"] for r in self._raw_muon)
@@ -1111,7 +1141,7 @@ class ThongKeSharedPage(QWidget):
             rows = [r for r in self._raw_ton
                     if not q or q in r["item_name"].lower()]
             self._load_ton(rows)
-        else:
+        elif self._active_tab == "muon":
             q = self._muon_search.text().strip().lower()
             rows = [r for r in self._raw_muon
                     if not q
@@ -1119,6 +1149,14 @@ class ThongKeSharedPage(QWidget):
                     or q in (r["borrower"] or "").lower()
                     or q in (r["transaction_date"] or "")]
             self._load_muon(rows)
+        else:
+            q = self._search.text().strip().lower()
+            rows = [r for r in self._raw_h4
+                    if not q
+                    or q in (r["reference_number"] or "").lower()
+                    or q in (r["wh_name"] or "").lower()
+                    or q in (r["transaction_date"] or "")]
+            self._load_phieu_h4(rows)
 
     # ── Table helpers ─────────────────────────────────────────────────────────
 
@@ -1201,6 +1239,104 @@ class ThongKeSharedPage(QWidget):
                 (r["borrower"] or "—",               False),
             ]):
                 self._table.setItem(ri, c, self._mk(*args))
+
+    def _load_phieu_h4(self, rows):
+        rows = self._sort_rows(rows)
+        F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
+        self._setup_cols(self._COLS_H4, [
+            (F, 52), (F, 130), (F, 110), (S, None), (F, 100),
+        ])
+        self._table.setRowCount(0)
+        for i, r in enumerate(rows):
+            ri = self._table.rowCount()
+            self._table.insertRow(ri)
+            self._table.setRowHeight(ri, 48)
+            stt_cell = self._mk(str(i + 1), True)
+            stt_cell.setData(Qt.ItemDataRole.UserRole, r["id"])
+            self._table.setItem(ri, 0, stt_cell)
+            for c, args in enumerate([
+                (r["reference_number"] or "—",  True),
+                (r["transaction_date"],          True),
+                (r["wh_name"] or "—",           False),
+                (str(r["line_count"]),           True),
+            ], start=1):
+                self._table.setItem(ri, c, self._mk(*args))
+
+    def _on_table_double_click(self, row: int, _: int):
+        if self._active_tab != "phieu_h4":
+            return
+        item = self._table.item(row, 0)
+        if not item:
+            return
+        tx_id = item.data(Qt.ItemDataRole.UserRole)
+        if tx_id:
+            self._edit_phieu_h4(tx_id)
+
+    def _on_table_context_menu(self, pos):
+        if self._active_tab != "phieu_h4":
+            return
+        row = self._table.rowAt(pos.y())
+        if row < 0:
+            return
+        item = self._table.item(row, 0)
+        if not item:
+            return
+        tx_id = item.data(Qt.ItemDataRole.UserRole)
+        if not tx_id:
+            return
+        menu = QMenu(self)
+        act_edit = QAction("Sửa", self)
+        act_del  = QAction("Xóa", self)
+        menu.addAction(act_edit)
+        menu.addAction(act_del)
+        act = menu.exec(QCursor.pos())
+        if act == act_edit:
+            self._edit_phieu_h4(tx_id)
+        elif act == act_del:
+            self._confirm_delete_phieu_h4(tx_id)
+
+    def _edit_phieu_h4(self, tx_id: int):
+        from ui.dialogs.chuyen_h4_form import ChuyenH4FormDialog
+        dlg = ChuyenH4FormDialog(self, tx_id=tx_id)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _confirm_delete_phieu_h4(self, tx_id: int):
+        from PyQt6.QtWidgets import QMessageBox
+        conn = database.get_conn()
+        tx = conn.execute(
+            "SELECT reference_number FROM transactions WHERE id=?", (tx_id,)
+        ).fetchone()
+        ref = tx["reference_number"] or f"#{tx_id}" if tx else f"#{tx_id}"
+        reply = QMessageBox.question(
+            self, "Xác nhận xóa",
+            f"Xóa phiếu chuyển H4 '{ref}'?\nTồn kho sẽ được hoàn lại.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        tx_full = conn.execute(
+            "SELECT to_warehouse_id FROM transactions WHERE id=?", (tx_id,)
+        ).fetchone()
+        if not tx_full:
+            return
+        wh_id = tx_full["to_warehouse_id"]
+        for ol in conn.execute(
+            "SELECT item_type_id, quality_level_from, quantity"
+            " FROM transaction_lines WHERE transaction_id=?", (tx_id,)
+        ).fetchall():
+            conn.execute("""
+                UPDATE inventory SET quantity=quantity+?
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=1
+            """, (ol["quantity"], wh_id, ol["item_type_id"], ol["quality_level_from"]))
+            conn.execute("""
+                UPDATE inventory SET quantity=MAX(0, quantity-?)
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level='H4' AND is_shared=1
+            """, (ol["quantity"], wh_id, ol["item_type_id"]))
+        conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (tx_id,))
+        conn.execute("DELETE FROM transactions WHERE id=?", (tx_id,))
+        conn.commit()
+        self.refresh()
 
 
 # ── Per-warehouse tab page ────────────────────────────────────────────────────
