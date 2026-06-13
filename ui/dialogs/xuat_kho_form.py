@@ -35,6 +35,27 @@ _TITLES = {
 }
 
 
+class _ComboItem:
+    """Thin wrapper around ItemType that tags shared-pool (DC) entries."""
+    __slots__ = ("it", "is_dc")
+    def __init__(self, it, is_dc: bool = False):
+        self.it = it
+        self.is_dc = is_dc
+    @property
+    def id(self): return self.it.id
+    @property
+    def code(self): return self.it.code
+    @property
+    def name(self): return self.it.name
+    @property
+    def unit_of_measure(self): return self.it.unit_of_measure
+    @property
+    def unit_price(self): return self.it.unit_price
+    @property
+    def display_name(self):
+        return f"{self.it.name}(DC)" if self.is_dc else self.it.name
+
+
 class IssueLineRow(QWidget):
     removed = pyqtSignal(object)
     value_changed = pyqtSignal()
@@ -42,12 +63,14 @@ class IssueLineRow(QWidget):
 
     def __init__(self, item_types, show_price: bool = True,
                  show_quality: bool = False, stock_map: dict | None = None,
+                 quality_levels: tuple = ("H1", "H2", "H3", "H4"),
                  parent=None):
         super().__init__(parent)
         self._item_types = item_types
         self._show_price = show_price
         self._show_quality = show_quality
         self._stock_map = stock_map or {}
+        self._quality_levels = quality_levels
         self._unit_price = 0.0
         self.setStyleSheet("background: transparent;")
 
@@ -62,7 +85,8 @@ class IssueLineRow(QWidget):
         self.combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.combo.setStyleSheet(_FIELD)
         for it in item_types:
-            self.combo.addItem(it.name, it)
+            label = it.display_name if isinstance(it, _ComboItem) else it.name
+            self.combo.addItem(label, it)
         self.combo.setCurrentIndex(-1)
         self.combo.lineEdit().setPlaceholderText("Tìm mặt hàng...")
         self.combo.lineEdit().setReadOnly(False)
@@ -93,7 +117,7 @@ class IssueLineRow(QWidget):
         self.combo_quality.setFixedHeight(34)
         self.combo_quality.setFixedWidth(70)
         self.combo_quality.setFont(QFont(FONT, 12))
-        for ql in ("H1", "H2", "H3", "H4"):
+        for ql in quality_levels:
             self.combo_quality.addItem(ql)
         self.combo_quality.setStyleSheet("""
             QComboBox { border: 1px solid #ddd; border-radius: 6px;
@@ -164,12 +188,16 @@ class IssueLineRow(QWidget):
     def _on_item_changed(self, _):
         it = self.combo.currentData()
         self.lbl_unit.setText(it.unit_of_measure if it else "—")
-        if self._show_price and it:
+        is_dc = isinstance(it, _ComboItem) and it.is_dc if it else False
+        if self._show_price and it and not is_dc:
             self._unit_price = it.unit_price or 0.0
             self.lbl_price.setText(f"{self._unit_price:,.0f} đ" if self._unit_price else "—")
         else:
             self._unit_price = 0.0
             self.lbl_price.setText("—")
+        if self._show_price:
+            self.lbl_price.setVisible(not is_dc)
+            self.lbl_total.setVisible(not is_dc)
         self._update_max_qty()
         self._recalc()
         self.item_changed.emit()
@@ -187,7 +215,9 @@ class IssueLineRow(QWidget):
 
         if self._show_quality:
             ql = self.combo_quality.currentText()
-            stock = self._stock_map.get((it.id, ql), 0)
+            is_dc = isinstance(it, _ComboItem) and it.is_dc
+            key = (it.id, ql, True) if is_dc else (it.id, ql)
+            stock = self._stock_map.get(key, 0)
         else:
             stock = self._stock_map.get(it.id, 0)
 
@@ -207,20 +237,54 @@ class IssueLineRow(QWidget):
         self._stock_map = stock_map
         self._update_max_qty()
 
-    def refresh_available(self, exclude_ids: set):
+    def set_item_types(self, item_types):
+        current = self.combo.currentData()
+        all_types = list(item_types)
+        if current:
+            cur_is_dc = isinstance(current, _ComboItem) and current.is_dc
+            if not any(it.id == current.id and (isinstance(it, _ComboItem) and it.is_dc) == cur_is_dc
+                       for it in all_types):
+                all_types.append(current)
+        self._item_types = all_types
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        for it in all_types:
+            label = it.display_name if isinstance(it, _ComboItem) else it.name
+            self.combo.addItem(label, it)
+        if current:
+            cur_is_dc = isinstance(current, _ComboItem) and current.is_dc
+            for i in range(self.combo.count()):
+                d = self.combo.itemData(i)
+                if d and d.id == current.id and (isinstance(d, _ComboItem) and d.is_dc) == cur_is_dc:
+                    self.combo.setCurrentIndex(i)
+                    break
+        else:
+            self.combo.setCurrentIndex(-1)
+        self.combo.blockSignals(False)
+        self._setup_search()
+        self._update_max_qty()
+
+    def refresh_available(self, exclude_keys: set):
+        """exclude_keys: set of (item_id, is_dc) tuples for rows already used."""
         current_it = self.combo.currentData()
-        current_id = current_it.id if current_it else None
+        cur_is_dc = isinstance(current_it, _ComboItem) and current_it.is_dc if current_it else False
+        current_key = (current_it.id, cur_is_dc) if current_it else None
         self.combo.blockSignals(True)
         self.combo.clear()
         for it in self._item_types:
-            if it.id not in exclude_ids or it.id == current_id:
-                self.combo.addItem(it.name, it)
-        if current_id is not None:
+            is_dc = isinstance(it, _ComboItem) and it.is_dc
+            key = (it.id, is_dc)
+            label = it.display_name if isinstance(it, _ComboItem) else it.name
+            if key not in exclude_keys or key == current_key:
+                self.combo.addItem(label, it)
+        if current_key is not None:
             for i in range(self.combo.count()):
                 d = self.combo.itemData(i)
-                if d and d.id == current_id:
-                    self.combo.setCurrentIndex(i)
-                    break
+                if d:
+                    d_is_dc = isinstance(d, _ComboItem) and d.is_dc
+                    if d.id == current_key[0] and d_is_dc == current_key[1]:
+                        self.combo.setCurrentIndex(i)
+                        break
         else:
             self.combo.setCurrentIndex(-1)
         self.combo.blockSignals(False)
@@ -235,6 +299,7 @@ class IssueLineRow(QWidget):
         it = self.combo.currentData()
         if not it:
             return None
+        is_dc = isinstance(it, _ComboItem) and it.is_dc
         return IssueLine(
             item_type_id=it.id,
             item_code=it.code,
@@ -244,14 +309,18 @@ class IssueLineRow(QWidget):
             unit_price=self._unit_price,
             quality_level=self.combo_quality.currentText() if self._show_quality else "H1",
             notes=self.edit_notes.text().strip(),
+            is_shared=is_dc,
         )
 
     def fill(self, line: IssueLine):
+        target_is_dc = getattr(line, "is_shared", False)
         for i in range(self.combo.count()):
             it = self.combo.itemData(i)
             if it and it.id == line.item_type_id:
-                self.combo.setCurrentIndex(i)
-                break
+                it_is_dc = isinstance(it, _ComboItem) and it.is_dc
+                if it_is_dc == target_is_dc:
+                    self.combo.setCurrentIndex(i)
+                    break
         # When editing, allow restoring the original quantity even if > current stock
         if line.quantity > self.spin_qty.maximum():
             self.spin_qty.setMaximum(line.quantity)
@@ -278,10 +347,14 @@ class XuatKhoFormDialog(QDialog):
         self._stock_map: dict = {}
 
         show_price = (self._subtype == "to_unit")
-        show_quality = (self._subtype == "to_unit")
+        show_quality = True
         self._show_price = show_price
         self._show_quality = show_quality
+        self._quality_levels = ("H1", "H2", "H3", "H4") if self._subtype == "to_unit" else ("H1", "H2", "H3")
         self._shared_dest = "unit"
+        self._shared_item_types: list = []
+        self._dc_item_types: list = []
+        self._pending_dc_lines: list = []
         self._btn_unit_dest = self._btn_event_dest = None
         self._lbl_unit_dest = self._lbl_event_dest = None
 
@@ -564,6 +637,7 @@ class XuatKhoFormDialog(QDialog):
         wh_id = self.f_from_wh.currentData()
         if not wh_id:
             self._stock_map = {}
+            self._shared_item_types = []
             return
         conn = database.get_conn()
         if self._subtype == "to_unit":
@@ -573,54 +647,81 @@ class XuatKhoFormDialog(QDialog):
                 WHERE warehouse_id = ? AND is_shared = 0 AND quantity > 0
                 GROUP BY item_type_id, quality_level
             """, (wh_id,)).fetchall()
-            self._stock_map = {(r["item_type_id"], r["quality_level"]): r["qty"] for r in rows}
-        else:
-            rows = conn.execute("""
-                SELECT item_type_id, SUM(quantity) AS qty
+            stock_map = {(r["item_type_id"], r["quality_level"]): r["qty"] for r in rows}
+            dc_rows = conn.execute("""
+                SELECT item_type_id, quality_level, SUM(quantity) AS qty
                 FROM inventory
                 WHERE warehouse_id = ? AND is_shared = 1
                   AND quality_level IN ('H1','H2','H3') AND quantity > 0
-                GROUP BY item_type_id
+                GROUP BY item_type_id, quality_level
             """, (wh_id,)).fetchall()
-            self._stock_map = {r["item_type_id"]: r["qty"] for r in rows}
+            for r in dc_rows:
+                stock_map[(r["item_type_id"], r["quality_level"], True)] = r["qty"]
+            self._stock_map = stock_map
+            dc_ids = {r["item_type_id"] for r in dc_rows}
+            self._dc_item_types = [_ComboItem(it, is_dc=True) for it in self._item_types if it.id in dc_ids]
+        else:
+            rows = conn.execute("""
+                SELECT item_type_id, quality_level, SUM(quantity) AS qty
+                FROM inventory
+                WHERE warehouse_id = ? AND is_shared = 1
+                  AND quality_level IN ('H1','H2','H3') AND quantity > 0
+                GROUP BY item_type_id, quality_level
+            """, (wh_id,)).fetchall()
+            self._stock_map = {(r["item_type_id"], r["quality_level"]): r["qty"] for r in rows}
+            shared_ids = {r["item_type_id"] for r in rows}
+            self._shared_item_types = [it for it in self._item_types if it.id in shared_ids]
 
     def _push_stock_to_rows(self):
         for i in range(self._rows_layout.count()):
             w = self._rows_layout.itemAt(i).widget()
             if isinstance(w, IssueLineRow):
+                if self._subtype == "to_unit":
+                    w.set_item_types(self._item_types + self._dc_item_types)
+                elif self._subtype == "shared_loan" and self._shared_item_types:
+                    w.set_item_types(self._shared_item_types)
                 w.update_stock_map(self._stock_map)
 
     # ── Combo deduplication ───────────────────────────────────────────────────
 
     def _refresh_all_combos(self):
-        used: set[int] = set()
+        used: set = set()  # (item_type_id, is_dc) tuples
         for i in range(self._rows_layout.count()):
             w = self._rows_layout.itemAt(i).widget()
             if isinstance(w, IssueLineRow):
                 d = w.get_data()
                 if d:
-                    used.add(d.item_type_id)
+                    used.add((d.item_type_id, d.is_shared))
         for i in range(self._rows_layout.count()):
             w = self._rows_layout.itemAt(i).widget()
             if isinstance(w, IssueLineRow):
                 own_d = w.get_data()
-                own_id = own_d.item_type_id if own_d else None
-                w.refresh_available(used - ({own_id} if own_id else set()))
+                own_key = (own_d.item_type_id, own_d.is_shared) if own_d else None
+                w.refresh_available(used - ({own_key} if own_key else set()))
 
     # ── Rows ──────────────────────────────────────────────────────────────────
 
     def _add_line(self, line: IssueLine | None = None):
+        if self._subtype == "to_unit":
+            item_types = self._item_types + self._dc_item_types
+        elif self._subtype == "shared_loan" and line is None and self._shared_item_types:
+            item_types = self._shared_item_types
+        else:
+            item_types = self._item_types
         row = IssueLineRow(
-            self._item_types,
+            item_types,
             show_price=self._show_price,
             show_quality=self._show_quality,
             stock_map=self._stock_map,
+            quality_levels=self._quality_levels,
             parent=self,
         )
         if line:
             row.fill(line)
         row.removed.connect(self._remove_line)
         row.item_changed.connect(self._refresh_all_combos)
+        if self._subtype == "to_unit":
+            row.item_changed.connect(self._sort_rows)
         if self._show_price:
             row.value_changed.connect(self._update_total)
         count = self._rows_layout.count()
@@ -628,6 +729,22 @@ class XuatKhoFormDialog(QDialog):
         self._refresh_all_combos()
         if self._show_price:
             self._update_total()
+
+    def _sort_rows(self):
+        """Move DC rows to the bottom of the item list."""
+        layout = self._rows_layout
+        regular, dc = [], []
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if isinstance(w, IssueLineRow):
+                d = w.get_data()
+                (dc if d and d.is_shared else regular).append(w)
+        if not dc:
+            return
+        for w in regular + dc:
+            layout.removeWidget(w)
+        for i, w in enumerate(regular + dc):
+            layout.insertWidget(i, w)
 
     def _remove_line(self, row):
         self._rows_layout.removeWidget(row)
@@ -719,31 +836,59 @@ class XuatKhoFormDialog(QDialog):
             self._err("Vui lòng chọn Kho Xuất.")
             return None
 
-        if self._subtype == "shared_loan":
+        if self._subtype == "to_unit":
+            to_wh_id = self.f_to_wh.currentData()
+            recipient = self.f_person.text().strip()
+            person = recipient
+            transport = self.f_transport.text().strip()
+            notes_txt = self.f_notes.toPlainText().strip()
+            if not person:
+                self._err("Vui lòng nhập Người Nhận.")
+                return None
+            if not transport:
+                self._err("Vui lòng nhập Vận Chuyển.")
+                return None
+            if not notes_txt:
+                self._err("Vui lòng nhập Nội dung.")
+                return None
+        elif self._subtype == "shared_loan":
             if self._shared_dest == "unit":
                 to_wh_id = self.f_to_wh.currentData()
                 recipient = ""
             else:
                 to_wh_id = None
                 recipient = self.f_event_name.text().strip()
+            transport = self.f_transport.text().strip()
+            notes_txt = self.f_notes.toPlainText().strip()
         else:
             to_wh_id = self.f_to_wh.currentData()
             recipient = self.f_person.text().strip()
+            transport = self.f_transport.text().strip()
+            notes_txt = self.f_notes.toPlainText().strip()
 
-        lines: list[IssueLine] = []
+        # Separate regular and DC (shared-pool) lines
+        all_lines: list[IssueLine] = []
+        dc_lines: list[IssueLine] = []
         for i in range(self._rows_layout.count()):
             w = self._rows_layout.itemAt(i).widget()
             if isinstance(w, IssueLineRow):
                 d = w.get_data()
                 if d:
-                    lines.append(d)
-        if not lines:
+                    (dc_lines if d.is_shared else all_lines).append(d)
+        self._pending_dc_lines = dc_lines
+
+        if not all_lines and not dc_lines:
             self._err("Vui lòng thêm ít nhất một mặt hàng.")
             return None
-        zero_lines = [l.item_name for l in lines if l.quantity <= 0]
+        if not all_lines:
+            self._err("Phiếu Xuất Đơn Vị cần ít nhất một mặt hàng thường.\n"
+                      "Để xuất hàng dùng chung, hãy dùng tab Xuất Hàng Dùng Chung.")
+            return None
+
+        zero_lines = [l.item_name + ("(DC)" if l.is_shared else "") for l in all_lines + dc_lines if l.quantity <= 0]
         if zero_lines:
             self._err(
-                f"Mặt hàng sau đã hết tồn kho, không thể xuất:\n"
+                "Mặt hàng sau đã hết tồn kho, không thể xuất:\n"
                 + "\n".join(f"  • {n}" for n in zero_lines)
                 + "\n\nVui lòng xóa các dòng hàng này trước khi lưu."
             )
@@ -751,7 +896,7 @@ class XuatKhoFormDialog(QDialog):
 
         if not self._editing:
             self._reload_stock_map()
-            for line in lines:
+            for line in all_lines:
                 if self._show_quality:
                     available = self._stock_map.get((line.item_type_id, line.quality_level), 0)
                 else:
@@ -761,6 +906,14 @@ class XuatKhoFormDialog(QDialog):
                     self._err(
                         f"'{line.item_name}'{ql_info} không đủ tồn kho.\n"
                         f"Tồn: {available}  –  Xuất: {line.quantity}"
+                    )
+                    return None
+            for line in dc_lines:
+                available = self._stock_map.get((line.item_type_id, line.quality_level, True), 0)
+                if line.quantity > available:
+                    self._err(
+                        f"'{line.item_name}(DC)' ({line.quality_level}) không đủ tồn kho dùng chung.\n"
+                        f"Tồn DC: {available}  –  Xuất: {line.quantity}"
                     )
                     return None
 
@@ -782,7 +935,7 @@ class XuatKhoFormDialog(QDialog):
             created_by=self.f_person.text().strip(),
             transporter=self.f_transport.text().strip(),
             notes=self.f_notes.toPlainText().strip(),
-            lines=lines,
+            lines=all_lines,
         )
 
     def _save(self):
@@ -793,6 +946,8 @@ class XuatKhoFormDialog(QDialog):
             update(issue)
         else:
             insert(issue)
+            if self._pending_dc_lines and self._subtype == "to_unit":
+                self._auto_create_muon(issue, self._pending_dc_lines)
         self.accept()
 
     def _on_export_voucher(self):
@@ -804,8 +959,34 @@ class XuatKhoFormDialog(QDialog):
             tx_id = self._editing.id
         else:
             tx_id = insert(issue)
+            if self._pending_dc_lines and self._subtype == "to_unit":
+                self._auto_create_muon(issue, self._pending_dc_lines)
         self._export_phieu_xlsx(tx_id)
         self.accept()
+
+    def _auto_create_muon(self, xuat_issue: "Issue", dc_lines: list) -> None:
+        """Automatically create a MUON transaction for DC lines embedded in a to_unit phiếu."""
+        dc_ref = f"{xuat_issue.reference_number}-DC"
+        n = 2
+        while ref_exists(dc_ref):
+            dc_ref = f"{xuat_issue.reference_number}-DC{n}"
+            n += 1
+        muon = Issue(
+            id=None,
+            reference_number=dc_ref,
+            from_warehouse_id=xuat_issue.from_warehouse_id,
+            from_warehouse_name="",
+            to_warehouse_id=xuat_issue.to_warehouse_id,
+            to_warehouse_name="",
+            transaction_date=xuat_issue.transaction_date,
+            tx_type="MUON",
+            recipient="",
+            created_by=xuat_issue.created_by,
+            transporter=xuat_issue.transporter,
+            notes=xuat_issue.notes,
+            lines=dc_lines,
+        )
+        insert(muon)
 
     def _export_phieu_xlsx(self, tx_id: int):
         try:

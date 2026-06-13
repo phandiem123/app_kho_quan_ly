@@ -14,9 +14,9 @@ _TX = {
 _QUALITY = {
     "new":           "H1",
     "from_unit":     "H4",
-    "unit_return":   "H1",
-    "event_return":  "H1",
-    "shared_return": "H1",
+    "unit_return":   "H3",
+    "event_return":  "H3",
+    "shared_return": "H3",
 }
 
 
@@ -221,9 +221,9 @@ def insert(receipt: Receipt) -> int:
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
                 WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
             """, (line.quantity, receipt.from_warehouse_id, line.item_type_id))
-            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity, is_shared=1)
-        elif subtype == "event_return":
-            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity, is_shared=1)
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H3", line.quantity, is_shared=1)
+        elif subtype == "event_return" or (subtype == "shared_return" and not receipt.from_warehouse_id):
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H3", line.quantity, is_shared=1)
 
     conn.commit()
     return tx_id
@@ -304,9 +304,9 @@ def update(receipt: Receipt) -> None:
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
                 WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
             """, (line.quantity, receipt.from_warehouse_id, line.item_type_id))
-            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity, is_shared=1)
-        elif subtype == "event_return":
-            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H1", line.quantity, is_shared=1)
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H3", line.quantity, is_shared=1)
+        elif subtype == "event_return" or (subtype == "shared_return" and not receipt.from_warehouse_id):
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H3", line.quantity, is_shared=1)
     conn.commit()
 
 

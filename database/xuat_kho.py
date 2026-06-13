@@ -19,6 +19,7 @@ class IssueLine:
     quality_level: str = "H1"
     notes: str = ""
     id: int | None = None
+    is_shared: bool = False  # runtime-only; DC items tracked via separate MUON tx
 
 
 @dataclass
@@ -159,6 +160,87 @@ def _batch_status(conn, issues: list[Issue]) -> dict[int, str]:
     return result
 
 
+def get_loan_items_remaining(
+    loan_tx_id: int, exclude_receipt_id: int | None = None
+) -> list[dict]:
+    """Items and still-returnable quantities for a specific MUON-to-event transaction."""
+    conn = database.get_conn()
+    loaned = conn.execute("""
+        SELECT tl.item_type_id, it.name AS item_name, it.code AS item_code,
+               it.unit_of_measure, SUM(tl.quantity) AS loaned_qty
+        FROM transaction_lines tl
+        JOIN item_types it ON it.id = tl.item_type_id
+        WHERE tl.transaction_id = ?
+        GROUP BY tl.item_type_id
+    """, (loan_tx_id,)).fetchall()
+
+    excl = " AND t.id != ?" if exclude_receipt_id else ""
+    params: list = [loan_tx_id] + ([exclude_receipt_id] if exclude_receipt_id else [])
+    returned = conn.execute(f"""
+        SELECT tl.item_type_id, SUM(tl.quantity) AS qty
+        FROM transactions t
+        JOIN transaction_lines tl ON tl.transaction_id = t.id
+        WHERE t.type = 'TRA' AND t.loan_transaction_id = ?{excl}
+        GROUP BY tl.item_type_id
+    """, params).fetchall()
+    ret_map = {r["item_type_id"]: r["qty"] for r in returned}
+
+    result = []
+    for r in loaned:
+        remaining = r["loaned_qty"] - ret_map.get(r["item_type_id"], 0)
+        if remaining > 0:
+            result.append({
+                "item_type_id": r["item_type_id"],
+                "item_name": r["item_name"],
+                "item_code": r["item_code"],
+                "unit_of_measure": r["unit_of_measure"],
+                "loaned_qty": r["loaned_qty"],
+                "remaining_qty": remaining,
+            })
+    return result
+
+
+def get_unit_loan_items_remaining(
+    unit_wh_id: int, tong_wh_id: int, exclude_receipt_id: int | None = None
+) -> list[dict]:
+    """Items and still-returnable quantities for all MUON transactions from a unit."""
+    conn = database.get_conn()
+    loaned = conn.execute("""
+        SELECT tl.item_type_id, it.name AS item_name, it.code AS item_code,
+               it.unit_of_measure, SUM(tl.quantity) AS loaned_qty
+        FROM transactions t
+        JOIN transaction_lines tl ON tl.transaction_id = t.id
+        JOIN item_types it ON it.id = tl.item_type_id
+        WHERE t.type = 'MUON' AND t.to_warehouse_id = ? AND t.from_warehouse_id = ?
+        GROUP BY tl.item_type_id
+    """, (unit_wh_id, tong_wh_id)).fetchall()
+
+    excl = " AND t.id != ?" if exclude_receipt_id else ""
+    params: list = [unit_wh_id, tong_wh_id] + ([exclude_receipt_id] if exclude_receipt_id else [])
+    returned = conn.execute(f"""
+        SELECT tl.item_type_id, SUM(tl.quantity) AS qty
+        FROM transactions t
+        JOIN transaction_lines tl ON tl.transaction_id = t.id
+        WHERE t.type = 'TRA' AND t.from_warehouse_id = ? AND t.to_warehouse_id = ?{excl}
+        GROUP BY tl.item_type_id
+    """, params).fetchall()
+    ret_map = {r["item_type_id"]: r["qty"] for r in returned}
+
+    result = []
+    for r in loaned:
+        remaining = r["loaned_qty"] - ret_map.get(r["item_type_id"], 0)
+        if remaining > 0:
+            result.append({
+                "item_type_id": r["item_type_id"],
+                "item_name": r["item_name"],
+                "item_code": r["item_code"],
+                "unit_of_measure": r["unit_of_measure"],
+                "loaned_qty": r["loaned_qty"],
+                "remaining_qty": remaining,
+            })
+    return result
+
+
 def get_loan_events() -> list[dict]:
     """Return all MUON-to-event transactions for populating the event dropdown."""
     conn = database.get_conn()
@@ -258,8 +340,8 @@ def insert(issue: Issue) -> int:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
                 WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
-                  AND received_at_unit_date IS NULL
-            """, (line.quantity, issue.from_warehouse_id, line.item_type_id))
+                  AND quality_level=? AND received_at_unit_date IS NULL
+            """, (line.quantity, issue.from_warehouse_id, line.item_type_id, ql))
 
     conn.commit()
     return tx_id
@@ -291,8 +373,8 @@ def update(issue: Issue) -> None:
                 conn.execute("""
                     UPDATE inventory SET quantity = quantity + ?
                     WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
-                      AND received_at_unit_date IS NULL
-                """, (line.quantity, old["from_warehouse_id"], line.item_type_id))
+                      AND quality_level=? AND received_at_unit_date IS NULL
+                """, (line.quantity, old["from_warehouse_id"], line.item_type_id, ql))
 
     conn.execute("""
         UPDATE transactions SET
@@ -323,8 +405,8 @@ def update(issue: Issue) -> None:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
                 WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
-                  AND received_at_unit_date IS NULL
-            """, (line.quantity, issue.from_warehouse_id, line.item_type_id))
+                  AND quality_level=? AND received_at_unit_date IS NULL
+            """, (line.quantity, issue.from_warehouse_id, line.item_type_id, ql))
 
     conn.commit()
 
@@ -352,11 +434,12 @@ def delete(issue_id: int) -> None:
                         WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
                     """, (line.quantity, old["to_warehouse_id"], line.item_type_id, ql))
             elif subtype == "shared_loan" and old["from_warehouse_id"]:
+                ql_del = line.quality_level or "H1"
                 conn.execute("""
                     UPDATE inventory SET quantity = quantity + ?
                     WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
-                      AND received_at_unit_date IS NULL
-                """, (line.quantity, old["from_warehouse_id"], line.item_type_id))
+                      AND quality_level=? AND received_at_unit_date IS NULL
+                """, (line.quantity, old["from_warehouse_id"], line.item_type_id, ql_del))
 
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (issue_id,))
     conn.execute("DELETE FROM transactions WHERE id=?", (issue_id,))

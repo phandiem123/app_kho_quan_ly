@@ -780,25 +780,21 @@ class ThongKePage(QWidget):
 class ThongKeSharedPage(QWidget):
     """Hàng dùng chung – tồn kho (H1–H3), đang cho mượn, chờ thanh xử lý (H4)."""
 
-    _COLS_TON  = ["STT", "Tên Hàng", "ĐVT", "H1", "H2", "H3", "Tồn Kho"]
+    _COLS_TON  = ["STT", "Tên Hàng", "ĐVT", "H3", "H4"]
     _COLS_MUON = ["STT", "Số Phiếu", "Ngày Mượn", "Tên Hàng",
                   "ĐVT", "Số Lượng", "Đơn Vị / Người Mượn"]
-    _COLS_TXL  = ["STT", "Tên Hàng", "ĐVT", "Số Lượng"]
 
     _TABS = [
         ("ton",  "Tồn Kho"),
         ("muon", "Đang Cho Mượn"),
-        ("txl",  "Chờ TXL (H4)"),
     ]
 
     _SORT_KEYS: dict[str, dict] = {
         "ton": {
             1: lambda r: (r["item_name"] or "").lower(),
             2: lambda r: (r["unit_of_measure"] or "").lower(),
-            3: lambda r: r["h1"],
-            4: lambda r: r["h2"],
-            5: lambda r: r["h3"],
-            6: lambda r: r["total"],
+            3: lambda r: r["h3"],
+            4: lambda r: r["h4"],
         },
         "muon": {
             1: lambda r: (r["reference_number"] or "").lower(),
@@ -807,11 +803,6 @@ class ThongKeSharedPage(QWidget):
             4: lambda r: (r["unit_of_measure"] or "").lower(),
             5: lambda r: r["quantity"],
             6: lambda r: (r["borrower"] or "").lower(),
-        },
-        "txl": {
-            1: lambda r: (r["item_name"] or "").lower(),
-            2: lambda r: (r["unit_of_measure"] or "").lower(),
-            3: lambda r: r["total"],
         },
     }
 
@@ -822,9 +813,8 @@ class ThongKeSharedPage(QWidget):
         self._active_wh_id: int | None = None
         self._raw_ton:  list = []
         self._raw_muon: list = []
-        self._raw_txl:  list = []
         self._sort: dict[str, tuple[int, bool]] = {
-            "ton": (-1, True), "muon": (-1, True), "txl": (-1, True),
+            "ton": (-1, True), "muon": (-1, True),
         }
         self._build_ui()
 
@@ -832,7 +822,7 @@ class ThongKeSharedPage(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(36, 32, 36, 24)
+        root.setContentsMargins(36, 32, 52, 24)
         root.setSpacing(0)
 
         top = QHBoxLayout()
@@ -843,15 +833,15 @@ class ThongKeSharedPage(QWidget):
         top.addStretch()
 
         _btn_style = """
-            QPushButton { border: none; border-radius: 8px; padding: 0 16px;
-                font-size: 12px; font-weight: 600; }
-            QPushButton:hover { opacity: 0.85; }
+            QPushButton { border: 1px solid #d0d0d0; border-radius: 8px; padding: 0 16px;
+                font-size: 12px; font-weight: 600; background: #f5f5f5; color: #444; }
+            QPushButton:hover { background: #e8e8e8; }
         """
         btn_nhan_sk = QPushButton("Nhận Từ Sự Kiện")
         btn_nhan_sk.setFixedHeight(34)
         btn_nhan_sk.setFont(QFont(FONT, 12, QFont.Weight.Bold))
         btn_nhan_sk.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_nhan_sk.setStyleSheet(_btn_style + "QPushButton { background: #16a34a; color: white; }")
+        btn_nhan_sk.setStyleSheet(_btn_style)
         btn_nhan_sk.clicked.connect(self._on_nhan_tu_su_kien)
         top.addWidget(btn_nhan_sk)
         top.addSpacing(8)
@@ -860,7 +850,7 @@ class ThongKeSharedPage(QWidget):
         btn_xuat.setFixedHeight(34)
         btn_xuat.setFont(QFont(FONT, 12, QFont.Weight.Bold))
         btn_xuat.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_xuat.setStyleSheet(_btn_style + "QPushButton { background: #2563eb; color: white; }")
+        btn_xuat.setStyleSheet(_btn_style)
         btn_xuat.clicked.connect(self._on_xuat_cho_muon)
         top.addWidget(btn_xuat)
         top.addSpacing(8)
@@ -869,10 +859,9 @@ class ThongKeSharedPage(QWidget):
         btn_h4.setFixedHeight(34)
         btn_h4.setFont(QFont(FONT, 12, QFont.Weight.Bold))
         btn_h4.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_h4.setStyleSheet(_btn_style + "QPushButton { background: #c0392b; color: white; }")
+        btn_h4.setStyleSheet(_btn_style)
         btn_h4.clicked.connect(self._on_chuyen_h4)
         top.addWidget(btn_h4)
-        top.addSpacing(16)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Tìm mặt hàng...")
@@ -884,7 +873,18 @@ class ThongKeSharedPage(QWidget):
             QLineEdit:focus { border-color: #bbb; }
         """)
         self._search.textChanged.connect(self._apply_filter)
-        top.addWidget(self._search)
+
+        self._muon_search = QLineEdit()
+        self._muon_search.setPlaceholderText("Tìm số phiếu / đơn vị / ngày mượn...")
+        self._muon_search.setFixedSize(300, 34)
+        self._muon_search.setFont(QFont(FONT, 12))
+        self._muon_search.setStyleSheet("""
+            QLineEdit { border: 1px solid #e0e0e0; border-radius: 8px;
+                padding: 0 12px; background: white; color: #111; }
+            QLineEdit:focus { border-color: #bbb; }
+        """)
+        self._muon_search.textChanged.connect(self._apply_filter)
+        self._muon_search.setVisible(False)
 
         self._wh_combo = QComboBox()
         self._wh_combo.setFixedHeight(34)
@@ -907,7 +907,6 @@ class ThongKeSharedPage(QWidget):
                 selection-background-color: #f0f0f0; }
         """)
         self._wh_combo.currentIndexChanged.connect(self._on_wh_changed)
-        top.addWidget(self._wh_combo)
         root.addLayout(top)
         root.addSpacing(20)
 
@@ -945,6 +944,12 @@ class ThongKeSharedPage(QWidget):
             btn.clicked.connect(lambda _, k=key: self._on_tab(k))
             tab_h.addWidget(btn)
         tab_h.addStretch()
+        tab_h.addWidget(self._muon_search)
+        tab_h.addSpacing(8)
+        tab_h.addWidget(self._wh_combo)
+        tab_h.addSpacing(8)
+        tab_h.addWidget(self._search)
+        tab_h.addSpacing(8)
         tab_h.addWidget(self._vis_btn)
         self._apply_tab_style()
         root.addWidget(tab_frame)
@@ -995,13 +1000,16 @@ class ThongKeSharedPage(QWidget):
     # ── Interactions ──────────────────────────────────────────────────────────
 
     def _on_tab(self, key: str):
-        # Save sort state of current tab, restore for new tab
         self._sort[self._active_tab] = (self._smart_hdr._scol, self._smart_hdr._sasc)
         self._active_tab = key
         sc, sa = self._sort.get(key, (-1, True))
         self._smart_hdr._scol = sc
         self._smart_hdr._sasc = sa
         self._apply_tab_style()
+        is_muon = (key == "muon")
+        self._wh_combo.setVisible(not is_muon)
+        self._search.setVisible(not is_muon)
+        self._muon_search.setVisible(is_muon)
         self._apply_filter()
 
     def _on_wh_changed(self, _):
@@ -1063,19 +1071,16 @@ class ThongKeSharedPage(QWidget):
         muon_f = "AND tx.from_warehouse_id = ?" if wh_id else ""
         p = [wh_id] if wh_id else []
 
-        # Tab 1: Tồn kho H1/H2/H3
+        # Tab 1: Tồn kho H3/H4
         self._raw_ton = conn.execute(f"""
             SELECT t.id AS item_type_id, t.code AS item_code,
                    t.name AS item_name, t.unit_of_measure,
-                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
-                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
                    SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
-                   SUM(CASE WHEN i.quality_level IN ('H1','H2','H3')
-                             THEN i.quantity ELSE 0 END) AS total
+                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4
             FROM inventory i
             JOIN item_types t ON t.id = i.item_type_id
-            WHERE i.is_shared=1 AND i.quality_level IN ('H1','H2','H3') {inv_f}
-            GROUP BY t.id HAVING total > 0 ORDER BY t.name
+            WHERE i.is_shared=1 AND i.quality_level IN ('H3','H4') {inv_f}
+            GROUP BY t.id HAVING (h3 + h4) > 0 ORDER BY t.name
         """, p).fetchall()
 
         # Tab 2: Đang cho mượn (giao dịch type MUON)
@@ -1092,40 +1097,28 @@ class ThongKeSharedPage(QWidget):
             ORDER BY tx.transaction_date DESC, tx.id DESC, tl.id
         """, p).fetchall()
 
-        # Tab 3: Chờ TXL – H4 shared
-        self._raw_txl = conn.execute(f"""
-            SELECT t.id AS item_type_id, t.code AS item_code,
-                   t.name AS item_name, t.unit_of_measure,
-                   SUM(i.quantity) AS total
-            FROM inventory i
-            JOIN item_types t ON t.id = i.item_type_id
-            WHERE i.is_shared=1 AND i.quality_level='H4' {inv_f}
-            GROUP BY t.id HAVING total > 0 ORDER BY t.name
-        """, p).fetchall()
-
-        ton  = sum(r["total"]    for r in self._raw_ton)
-        muon = sum(r["quantity"] for r in self._raw_muon)
-        txl  = sum(r["total"]    for r in self._raw_txl)
+        h3_total = sum(r["h3"] for r in self._raw_ton)
+        h4_total = sum(r["h4"] for r in self._raw_ton)
+        muon     = sum(r["quantity"] for r in self._raw_muon)
         self._cards["muon"].set_value(str(muon))
-        self._cards["san_sang"].set_value(str(max(0, ton - muon)))
-        self._cards["txl"].set_value(str(txl))
+        self._cards["san_sang"].set_value(str(h3_total))
+        self._cards["txl"].set_value(str(h4_total))
         self._apply_filter()
 
     def _apply_filter(self):
-        q = self._search.text().strip().lower()
         if self._active_tab == "ton":
+            q = self._search.text().strip().lower()
             rows = [r for r in self._raw_ton
                     if not q or q in r["item_name"].lower()]
             self._load_ton(rows)
-        elif self._active_tab == "muon":
-            rows = [r for r in self._raw_muon
-                    if not q or q in r["item_name"].lower()
-                    or q in (r["borrower"] or "").lower()]
-            self._load_muon(rows)
         else:
-            rows = [r for r in self._raw_txl
-                    if not q or q in r["item_name"].lower()]
-            self._load_txl(rows)
+            q = self._muon_search.text().strip().lower()
+            rows = [r for r in self._raw_muon
+                    if not q
+                    or q in (r["reference_number"] or "").lower()
+                    or q in (r["borrower"] or "").lower()
+                    or q in (r["transaction_date"] or "")]
+            self._load_muon(rows)
 
     # ── Table helpers ─────────────────────────────────────────────────────────
 
@@ -1170,8 +1163,7 @@ class ThongKeSharedPage(QWidget):
         rows = self._sort_rows(rows)
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_TON, [
-            (F, 52), (S, None), (F, 60),
-            (F, 72), (F, 72), (F, 72), (F, 80),
+            (F, 52), (S, None), (F, 60), (F, 80), (F, 80),
         ])
         self._table.setRowCount(0)
         for i, r in enumerate(rows):
@@ -1182,10 +1174,8 @@ class ThongKeSharedPage(QWidget):
                 (str(i + 1),                              True),
                 (r["item_name"],                          False),
                 (r["unit_of_measure"],                    True),
-                (str(r["h1"]) if r["h1"] else "—",       True),
-                (str(r["h2"]) if r["h2"] else "—",       True),
                 (str(r["h3"]) if r["h3"] else "—",       True),
-                (str(r["total"]),                         True),
+                (str(r["h4"]) if r["h4"] else "—",       True, "red" if r["h4"] else None),
             ]):
                 self._table.setItem(ri, c, self._mk(*args))
 
@@ -1209,25 +1199,6 @@ class ThongKeSharedPage(QWidget):
                 (r["unit_of_measure"],               True),
                 (str(r["quantity"]),                 True),
                 (r["borrower"] or "—",               False),
-            ]):
-                self._table.setItem(ri, c, self._mk(*args))
-
-    def _load_txl(self, rows):
-        rows = self._sort_rows(rows)
-        F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
-        self._setup_cols(self._COLS_TXL, [
-            (F, 52), (S, None), (F, 60), (F, 80),
-        ])
-        self._table.setRowCount(0)
-        for i, r in enumerate(rows):
-            ri = self._table.rowCount()
-            self._table.insertRow(ri)
-            self._table.setRowHeight(ri, 48)
-            for c, args in enumerate([
-                (str(i + 1),           True),
-                (r["item_name"],       False),
-                (r["unit_of_measure"], True),
-                (str(r["total"]),      True, "red"),
             ]):
                 self._table.setItem(ri, c, self._mk(*args))
 
@@ -1805,33 +1776,28 @@ class ThongKeKhoPage(QWidget):
 class ThongKeDonViPage(QWidget):
     """Tồn kho tại Đơn Vị — mỗi đơn vị là một tab, niên hạn tính từ ngày nhập đơn vị."""
 
-    _COLS = ["STT", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
-             "H1", "H2", "H3", "H4", "Tổng"]
-    _COLS_SEARCH = ["STT", "Đơn Vị", "Tên Hàng", "ĐVT", "Tại ĐV", "Còn Lại",
+    _COLS = ["STT", "Tên Hàng", "ĐVT", "H1", "H2", "H3", "H4", "Tổng"]
+    _COLS_SEARCH = ["STT", "Đơn Vị", "Tên Hàng", "ĐVT",
                     "H1", "H2", "H3", "H4", "Tổng"]
 
     _SORT_KEYS_NORMAL: dict = {
         1: lambda r: (r["item_name"] or "").lower(),
         2: lambda r: (r["unit_of_measure"] or "").lower(),
-        3: lambda r: r["max_months"] or 0,
-        4: lambda r: (r["total_lifespan_months"] or 0) - (r["max_months"] or 0),
-        5: lambda r: r["h1"],
-        6: lambda r: r["h2"],
-        7: lambda r: r["h3"],
-        8: lambda r: r["h4"],
-        9: lambda r: r["total"],
+        3: lambda r: r["h1"],
+        4: lambda r: r["h2"],
+        5: lambda r: r["h3"],
+        6: lambda r: r["h4"],
+        7: lambda r: r["total"],
     }
     _SORT_KEYS_SEARCH: dict = {
         1: lambda r: (r["wh_code"] or "").lower(),
         2: lambda r: (r["item_name"] or "").lower(),
         3: lambda r: (r["unit_of_measure"] or "").lower(),
-        4: lambda r: r["max_months"] or 0,
-        5: lambda r: (r["total_lifespan_months"] or 0) - (r["max_months"] or 0),
-        6: lambda r: r["h1"],
-        7: lambda r: r["h2"],
-        8: lambda r: r["h3"],
-        9: lambda r: r["h4"],
-        10: lambda r: r["total"],
+        4: lambda r: r["h1"],
+        5: lambda r: r["h2"],
+        6: lambda r: r["h3"],
+        7: lambda r: r["h4"],
+        8: lambda r: r["total"],
     }
 
     def __init__(self):
@@ -2006,8 +1972,6 @@ class ThongKeDonViPage(QWidget):
                 (QHeaderView.ResizeMode.Fixed, 90),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
-                (QHeaderView.ResizeMode.Fixed, 110),
-                (QHeaderView.ResizeMode.Fixed, 110),
                 (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Fixed, 72),
@@ -2017,8 +1981,6 @@ class ThongKeDonViPage(QWidget):
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
-                (QHeaderView.ResizeMode.Fixed, 110),
-                (QHeaderView.ResizeMode.Fixed, 110),
                 (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Fixed, 72),
@@ -2244,33 +2206,6 @@ class ThongKeDonViPage(QWidget):
             self._table.insertRow(ri)
             self._table.setRowHeight(ri, 48)
 
-            mm = r["max_months"]
-            lifespan = r["total_lifespan_months"]
-
-            # ── Tại ĐV ────────────────────────────────────────────────────
-            if mm is None:
-                tai_dv, tai_dv_clr = "—", None
-            else:
-                tai_dv = self._fmt_months(mm)
-                if mm >= lifespan:
-                    tai_dv_clr = "red"   # hết niên hạn → H4
-                elif mm >= 12:
-                    tai_dv_clr = "orange"  # đang H2/H3
-                else:
-                    tai_dv_clr = None    # còn H1
-
-            # ── Còn Lại ───────────────────────────────────────────────────
-            if mm is None:
-                con_lai, con_lai_clr = "—", None
-            else:
-                rem = lifespan - mm
-                if rem <= 0:
-                    con_lai, con_lai_clr = "Hết niên hạn", "red"
-                elif rem <= 12:
-                    con_lai, con_lai_clr = self._fmt_months(rem), "orange"
-                else:
-                    con_lai, con_lai_clr = self._fmt_months(rem), None
-
             tid = r["item_type_id"]
 
             def _tip(ql: str, current: int) -> str:
@@ -2309,8 +2244,6 @@ class ThongKeDonViPage(QWidget):
                     (r["wh_code"],         True,  None,        None),
                     (r["item_name"],       False, None,        None),
                     (r["unit_of_measure"], True,  None,        None),
-                    (tai_dv,               True,  tai_dv_clr,  None),
-                    (con_lai,              True,  con_lai_clr, None),
                     (str(r["h1"]),         True,  None,        _tip("H1", r["h1"])),
                     (str(r["h2"]),         True,  None,        _tip("H2", r["h2"])),
                     (str(r["h3"]),         True,  None,        _tip("H3", r["h3"])),
@@ -2323,8 +2256,6 @@ class ThongKeDonViPage(QWidget):
                     (str(i + 1),           True,  None,        None),
                     (r["item_name"],       False, None,        None),
                     (r["unit_of_measure"], True,  None,        None),
-                    (tai_dv,               True,  tai_dv_clr,  None),
-                    (con_lai,              True,  con_lai_clr, None),
                     (str(r["h1"]),         True,  None,        _tip("H1", r["h1"])),
                     (str(r["h2"]),         True,  None,        _tip("H2", r["h2"])),
                     (str(r["h3"]),         True,  None,        _tip("H3", r["h3"])),
@@ -2348,7 +2279,7 @@ class ThongKeDonViPage(QWidget):
 
             # Store edit key on H1-H4 cells so double-click knows what to update
             wh_id = r["wh_id"] if search_mode else self._active_wh_id
-            h_start = 6 if search_mode else 5
+            h_start = 4 if search_mode else 3
             for qi, ql in enumerate(("H1", "H2", "H3", "H4")):
                 item = self._table.item(ri, h_start + qi)
                 if item:

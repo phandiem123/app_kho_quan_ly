@@ -10,7 +10,9 @@ from database.warehouses import get_all as wh_get_all
 from database.receipts import (
     Receipt, ReceiptLine, insert, update, ref_exists, get_lines,
 )
-from database.xuat_kho import get_loan_events
+from database.xuat_kho import (
+    get_loan_events, get_loan_items_remaining, get_unit_loan_items_remaining,
+)
 
 FONT = "Segoe UI"
 
@@ -48,10 +50,12 @@ class LineItemRow(QWidget):
     item_changed = pyqtSignal()
 
     def __init__(self, item_types, show_price: bool = True,
-                 show_quality: bool = False, parent=None):
+                 show_quality: bool = False, max_qty_map: dict | None = None,
+                 parent=None):
         super().__init__(parent)
         self._item_types = item_types
         self._show_quality = show_quality
+        self._max_qty_map: dict[int, int] = max_qty_map or {}
         self.setStyleSheet("background: transparent;")
 
         h = QHBoxLayout(self)
@@ -85,6 +89,13 @@ class LineItemRow(QWidget):
         self.spin_qty.setFixedWidth(80)
         self.spin_qty.setFixedHeight(34)
         self.spin_qty.setStyleSheet(_SPIN)
+
+        self.lbl_remaining = QLabel("")
+        self.lbl_remaining.setFixedWidth(66)
+        self.lbl_remaining.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_remaining.setFont(QFont(FONT, 10))
+        self.lbl_remaining.setStyleSheet("color: #999; background: transparent;")
+        self.lbl_remaining.setVisible(bool(self._max_qty_map))
 
         self.combo_quality = QComboBox()
         self.combo_quality.setFixedHeight(34)
@@ -143,6 +154,7 @@ class LineItemRow(QWidget):
         h.addWidget(self.combo, 2)
         h.addWidget(self.lbl_unit)
         h.addWidget(self.spin_qty)
+        h.addWidget(self.lbl_remaining)
         if show_quality:
             h.addWidget(self.combo_quality)
         if show_price:
@@ -163,6 +175,16 @@ class LineItemRow(QWidget):
     def _on_item_changed(self, _):
         it = self.combo.currentData()
         self.lbl_unit.setText(it.unit_of_measure if it else "—")
+        if self._max_qty_map and it:
+            max_q = self._max_qty_map.get(it.id, 0)
+            self.spin_qty.setRange(1, max(1, max_q))
+            if self.spin_qty.value() > max_q:
+                self.spin_qty.setValue(max(1, max_q))
+            self.lbl_remaining.setText(f"≤ {max_q}")
+            self.lbl_remaining.setVisible(True)
+        elif not self._max_qty_map:
+            self.spin_qty.setRange(1, 9_999_999)
+            self.lbl_remaining.setVisible(False)
         if self._show_price and it:
             self._unit_price = it.unit_price or 0.0
             self.lbl_price.setText(f"{self._unit_price:,.0f} đ" if self._unit_price else "—")
@@ -171,6 +193,11 @@ class LineItemRow(QWidget):
             self.lbl_price.setText("—")
         self._recalc()
         self.item_changed.emit()
+
+    def update_max_qty_map(self, max_qty_map: dict[int, int]):
+        self._max_qty_map = max_qty_map
+        self.lbl_remaining.setVisible(bool(max_qty_map))
+        self._on_item_changed(None)
 
     def refresh_available(self, exclude_ids: set):
         current_it = self.combo.currentData()
@@ -217,6 +244,8 @@ class LineItemRow(QWidget):
             if it and it.id == line.item_type_id:
                 self.combo.setCurrentIndex(i)
                 break
+        if line.quantity > self.spin_qty.maximum():
+            self.spin_qty.setMaximum(line.quantity)
         self.spin_qty.setValue(line.quantity)
         if self._show_price:
             self._unit_price = line.unit_price or 0.0
@@ -318,6 +347,10 @@ class NhapKhoFormDialog(QDialog):
         self._btn_unit_src = self._btn_event_src = None
         self._lbl_unit_src = self._lbl_event_src = None
         self._loan_tx_id: int | None = None
+        # Loan-item restriction (for return subtypes)
+        self._loan_item_types_filtered: list = []
+        self._loan_max_qty_map: dict[int, int] = {}
+        self._is_return_mode = self._subtype in ("unit_return", "event_return", "shared_return")
 
         # Build event combo for event_return / shared_return-event source
         self.f_event_combo = QComboBox()
@@ -404,6 +437,8 @@ class NhapKhoFormDialog(QDialog):
 
         show_price   = (self._subtype == "new")
         show_quality = (self._subtype == "from_unit")
+        self._show_price   = show_price
+        self._show_quality = show_quality
 
         # Column header strip
         hdr_w = QWidget()
@@ -412,6 +447,8 @@ class NhapKhoFormDialog(QDialog):
         ch.setContentsMargins(6, 5, 6, 5)
         ch.setSpacing(6)
         col_defs = [("Mặt Hàng", 2, None), ("ĐVT", 0, 56), ("Số lượng", 0, 80)]
+        if self._is_return_mode:
+            col_defs += [("Còn lại", 0, 66)]
         if show_quality:
             col_defs += [("Mức HH", 0, 70)]
         if show_price:
@@ -446,17 +483,17 @@ class NhapKhoFormDialog(QDialog):
         scroll.setMinimumHeight(240)
         root.addWidget(scroll, 1)
 
-        btn_add = QPushButton("+ Thêm dòng hàng")
-        btn_add.setFont(QFont(FONT, 11))
-        btn_add.setFixedHeight(32)
-        btn_add.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_add.setStyleSheet("""
+        self._btn_add = QPushButton("+ Thêm dòng hàng")
+        self._btn_add.setFont(QFont(FONT, 11))
+        self._btn_add.setFixedHeight(32)
+        self._btn_add.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._btn_add.setStyleSheet("""
             QPushButton { border: 1px dashed #bbb; border-radius: 6px;
                 background: white; color: #555; }
             QPushButton:hover { border-color: #888; color: #111; background: #f8f8f8; }
         """)
-        btn_add.clicked.connect(lambda: self._add_line())
-        root.addWidget(btn_add)
+        self._btn_add.clicked.connect(lambda: self._add_line())
+        root.addWidget(self._btn_add)
 
         if show_price:
             tr = QHBoxLayout()
@@ -504,12 +541,16 @@ class NhapKhoFormDialog(QDialog):
         btn_row.addWidget(btn_save)
         root.addLayout(btn_row)
 
-        self._show_price = show_price
-        self._show_quality = show_quality
+        # Connect unit-combo signal for return subtypes
+        if self._subtype in ("unit_return", "shared_return"):
+            self.f_from_wh.currentIndexChanged.connect(self._on_unit_combo_changed)
+        # Also connect warehouse-to combo (affects unit remaining lookup)
+        if self._subtype == "unit_return":
+            self.f_wh.currentIndexChanged.connect(self._on_unit_combo_changed)
 
         if receipt:
             self._fill(receipt)
-        else:
+        elif not self._is_return_mode:
             self._add_line()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -555,9 +596,90 @@ class NhapKhoFormDialog(QDialog):
             self._lbl_event_src.setVisible(not is_unit)
             self.f_event_combo.setVisible(not is_unit)
         self._update_source_toggle_style()
+        if not self._editing:
+            self._clear_rows()
 
     def _on_event_combo_changed(self, _):
         self._loan_tx_id = self.f_event_combo.currentData()
+        if not self._editing:
+            self._reload_return_items()
+
+    def _on_unit_combo_changed(self, _):
+        if not self._editing:
+            self._reload_return_items()
+
+    def _clear_rows(self):
+        rows = []
+        for i in range(self._rows_layout.count()):
+            w = self._rows_layout.itemAt(i).widget()
+            if isinstance(w, LineItemRow):
+                rows.append(w)
+        for w in rows:
+            self._rows_layout.removeWidget(w)
+            w.deleteLater()
+
+    def _reload_return_items(self):
+        """Load loan items for the currently selected source and pre-populate rows."""
+        loan_data = self._fetch_loan_item_data()
+        if not loan_data:
+            self._clear_rows()
+            self._loan_item_types_filtered = []
+            self._loan_max_qty_map = {}
+            return
+
+        loan_ids = {d["item_type_id"] for d in loan_data}
+        self._loan_item_types_filtered = [it for it in self._item_types if it.id in loan_ids]
+        self._loan_max_qty_map = {d["item_type_id"]: d["remaining_qty"] for d in loan_data}
+
+        self._clear_rows()
+        for d in loan_data:
+            self._add_loan_item_row(d)
+
+    def _fetch_loan_item_data(self) -> list[dict]:
+        if self._subtype == "event_return":
+            loan_tx_id = self.f_event_combo.currentData()
+            if not loan_tx_id:
+                return []
+            return get_loan_items_remaining(loan_tx_id)
+        elif self._subtype == "unit_return":
+            unit_wh_id = self.f_from_wh.currentData()
+            tong_wh_id = self.f_wh.currentData()
+            if not unit_wh_id or not tong_wh_id:
+                return []
+            return get_unit_loan_items_remaining(unit_wh_id, tong_wh_id)
+        elif self._subtype == "shared_return":
+            if self._shared_source == "event_return":
+                loan_tx_id = self.f_event_combo.currentData()
+                if not loan_tx_id:
+                    return []
+                return get_loan_items_remaining(loan_tx_id)
+            else:
+                unit_wh_id = self.f_from_wh.currentData()
+                tong_wh_id = self.f_wh.currentData()
+                if not unit_wh_id or not tong_wh_id:
+                    return []
+                return get_unit_loan_items_remaining(unit_wh_id, tong_wh_id)
+        return []
+
+    def _add_loan_item_row(self, item_data: dict):
+        """Add a pre-filled row locked to one loan item with capped quantity."""
+        single_types = [it for it in self._item_types if it.id == item_data["item_type_id"]]
+        row = LineItemRow(
+            single_types,
+            show_price=self._show_price,
+            show_quality=self._show_quality,
+            max_qty_map={item_data["item_type_id"]: item_data["remaining_qty"]},
+            parent=self,
+        )
+        if row.combo.count() > 0:
+            row.combo.setCurrentIndex(0)
+        row.spin_qty.setValue(item_data["remaining_qty"])
+        row.removed.connect(self._remove_line)
+        row.item_changed.connect(self._refresh_all_combos)
+        if self._show_price:
+            row.value_changed.connect(self._update_total)
+        count = self._rows_layout.count()
+        self._rows_layout.insertWidget(count - 1, row)
 
     def _refresh_all_combos(self):
         used: set[int] = set()
@@ -575,8 +697,15 @@ class NhapKhoFormDialog(QDialog):
                 w.refresh_available(used - ({own_id} if own_id else set()))
 
     def _add_line(self, line: ReceiptLine | None = None):
-        row = LineItemRow(self._item_types, show_price=self._show_price,
-                          show_quality=self._show_quality, parent=self)
+        item_types = (
+            self._loan_item_types_filtered
+            if self._is_return_mode and self._loan_item_types_filtered
+            else self._item_types
+        )
+        max_map = self._loan_max_qty_map if self._is_return_mode and self._loan_max_qty_map else {}
+        row = LineItemRow(item_types, show_price=self._show_price,
+                          show_quality=self._show_quality,
+                          max_qty_map=max_map or None, parent=self)
         if line:
             row.fill(line)
         row.removed.connect(self._remove_line)
@@ -614,9 +743,11 @@ class NhapKhoFormDialog(QDialog):
             self.f_supplier.setText(receipt.supplier)
         elif self._subtype == "unit_return":
             _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
+            self._load_edit_loan_data(receipt)
         elif self._subtype == "event_return":
             _set_combo_by_data(self.f_event_combo, receipt.loan_transaction_id)
             self._loan_tx_id = receipt.loan_transaction_id
+            self._load_edit_loan_data(receipt)
         elif self._subtype == "shared_return":
             if receipt.from_warehouse_id:
                 self._set_shared_source("unit_return")
@@ -625,6 +756,7 @@ class NhapKhoFormDialog(QDialog):
                 self._set_shared_source("event_return")
                 _set_combo_by_data(self.f_event_combo, receipt.loan_transaction_id)
                 self._loan_tx_id = receipt.loan_transaction_id
+            self._load_edit_loan_data(receipt)
         else:
             _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
         self.f_person.setText(receipt.created_by)
@@ -634,6 +766,51 @@ class NhapKhoFormDialog(QDialog):
         self.f_notes.setPlainText(receipt.notes)
         for line in get_lines(receipt.id):
             self._add_line(line)
+
+    def _load_edit_loan_data(self, receipt: Receipt):
+        """Set loan item list and max quantities for edit mode.
+
+        Max per item = (loaned - returned by other receipts) so the user can
+        keep or reduce their existing quantities.  Items only in this receipt
+        (remaining_qty = 0 after excluding it) are added with their saved qty
+        as the ceiling so the row can still be displayed.
+        """
+        is_event = self._subtype == "event_return" or (
+            self._subtype == "shared_return" and not receipt.from_warehouse_id
+        )
+        is_unit = self._subtype == "unit_return" or (
+            self._subtype == "shared_return" and bool(receipt.from_warehouse_id)
+        )
+
+        data: list[dict] = []
+        if is_event and receipt.loan_transaction_id:
+            data = get_loan_items_remaining(
+                receipt.loan_transaction_id, exclude_receipt_id=receipt.id
+            )
+        elif is_unit and receipt.from_warehouse_id and receipt.to_warehouse_id:
+            data = get_unit_loan_items_remaining(
+                receipt.from_warehouse_id, receipt.to_warehouse_id,
+                exclude_receipt_id=receipt.id,
+            )
+
+        # Ensure items currently in this receipt appear even if remaining = 0
+        data_ids = {d["item_type_id"] for d in data}
+        for saved_line in get_lines(receipt.id):
+            if saved_line.item_type_id not in data_ids:
+                for it in self._item_types:
+                    if it.id == saved_line.item_type_id:
+                        data.append({
+                            "item_type_id": saved_line.item_type_id,
+                            "remaining_qty": saved_line.quantity,
+                        })
+                        break
+
+        if data:
+            self._loan_max_qty_map = {d["item_type_id"]: d["remaining_qty"] for d in data}
+            loan_ids = {d["item_type_id"] for d in data}
+            self._loan_item_types_filtered = [
+                it for it in self._item_types if it.id in loan_ids
+            ]
 
     def _save(self):
         ref = self.f_ref.text().strip()
