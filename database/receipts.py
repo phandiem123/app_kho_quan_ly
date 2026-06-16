@@ -33,6 +33,7 @@ class ReceiptLine:
     notes: str = ""
     quality_level: str = "H1"
     id: int | None = None
+    is_shared: bool = False  # runtime-only; DC lines in from_unit handled as auto-TRA
 
 
 @dataclass

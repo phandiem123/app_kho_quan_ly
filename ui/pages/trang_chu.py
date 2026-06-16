@@ -407,10 +407,10 @@ class TrangChuPage(QWidget):
                 item.widget().deleteLater()
 
         dc_qty = conn.execute("""
-            SELECT COALESCE(SUM(tl.quantity), 0) AS qty
-            FROM shared_borrows sb
-            JOIN transaction_lines tl ON tl.transaction_id = sb.transaction_id
-            WHERE sb.status = 'DANG_MUON'
+            SELECT COALESCE(SUM(i.quantity), 0) AS qty
+            FROM inventory i
+            JOIN warehouses w ON w.id = i.warehouse_id
+            WHERE i.is_shared = 1 AND w.type = 'DON_VI' AND i.quantity > 0
         """).fetchone()["qty"] or 0
 
         h4_returned = conn.execute("""
@@ -438,11 +438,10 @@ class TrangChuPage(QWidget):
         # ── Bảng: Đơn Vị Chưa Trả Hàng DC ───────────────────────────────────
         borrow_rows = conn.execute("""
             SELECT w.code, w.name,
-                   COALESCE(SUM(tl.quantity), 0) AS total_qty
-            FROM shared_borrows sb
-            JOIN warehouses w ON w.id = sb.borrowing_warehouse_id
-            JOIN transaction_lines tl ON tl.transaction_id = sb.transaction_id
-            WHERE sb.status = 'DANG_MUON'
+                   COALESCE(SUM(i.quantity), 0) AS total_qty
+            FROM inventory i
+            JOIN warehouses w ON w.id = i.warehouse_id
+            WHERE i.is_shared = 1 AND w.type = 'DON_VI' AND i.quantity > 0
             GROUP BY w.id
             ORDER BY w.name
         """).fetchall()

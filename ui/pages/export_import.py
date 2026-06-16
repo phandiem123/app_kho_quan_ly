@@ -241,6 +241,12 @@ class ExportImportPage(QWidget):
             secondary_label="Tải Mẫu", secondary_cb=self._template_transfers,
             tertiary_label="Xuất Excel", tertiary_cb=self._export_transfers,
         ))
+        import_row3.addWidget(_Card(
+            "Tồn Kho / Đơn Vị",
+            "Nhập số lượng tồn kho ban đầu từ Excel cho từng kho/đơn vị, mặt hàng, mức HH.",
+            "Nhập từ Excel", self._import_inventory,
+            secondary_label="Tải Mẫu", secondary_cb=self._template_inventory,
+        ))
         import_row3.addStretch()
         v.addLayout(import_row3)
 
@@ -1408,6 +1414,115 @@ class ExportImportPage(QWidget):
             msg = f"Đã tạo {inserted} phiếu luân chuyển."
             if errors:
                 msg += f"\n\nBỏ qua {len(errors)} dòng lỗi:\n" + "\n".join(errors[:10])
+            QMessageBox.information(self, "Nhập hoàn tất", msg)
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _template_inventory(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu File Mẫu", "mau_ton_kho.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Tồn Kho"
+            _write_header(ws, [
+                "Tên Kho / ĐV *", "Tên Hàng *", "Mức HH * (H1/H2/H3/H4)",
+                "Số Lượng *", "Ghi Chú",
+            ])
+            ws.append(["Kho Tổng D6", "Súng AK47", "H1", 50, ""])
+            ws.append(["Đơn Vị 01",   "Súng AK47", "H2", 10, "Hàng cũ"])
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _import_inventory(self):
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Chọn File Excel", "", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(path)
+            ws = wb.active
+            rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+            conn = database.get_conn()
+            wh_map = {r["name"]: r["id"] for r in conn.execute(
+                "SELECT name, id FROM warehouses WHERE is_active=1"
+            ).fetchall()}
+            item_map = {r["name"]: dict(r) for r in conn.execute(
+                "SELECT id, name FROM item_types WHERE is_active=1"
+            ).fetchall()}
+            VALID_QL = {"H1", "H2", "H3", "H4"}
+
+            inserted = updated = skipped = 0
+            errors: list[str] = []
+
+            for i, row in enumerate(rows, start=2):
+                if not row or not row[0]:
+                    continue
+                try:
+                    ten_kho  = str(row[0]).strip() if row[0] else ""
+                    ten_hang = str(row[1]).strip() if row[1] else ""
+                    ql       = str(row[2]).strip().upper() if row[2] else ""
+                    so_luong = int(row[3]) if row[3] else 0
+                    ghi_chu  = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+
+                    if not ten_kho or not ten_hang or ql not in VALID_QL or so_luong <= 0:
+                        errors.append(f"Dòng {i}: thiếu hoặc sai dữ liệu bắt buộc")
+                        skipped += 1
+                        continue
+                    if ten_kho not in wh_map:
+                        errors.append(f"Dòng {i}: không tìm thấy kho '{ten_kho}'")
+                        skipped += 1
+                        continue
+                    if ten_hang not in item_map:
+                        errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
+                        skipped += 1
+                        continue
+
+                    wh_id      = wh_map[ten_kho]
+                    item_id    = item_map[ten_hang]["id"]
+
+                    existing = conn.execute("""
+                        SELECT id FROM inventory
+                        WHERE warehouse_id=? AND item_type_id=?
+                          AND quality_level=? AND is_shared=0
+                          AND received_at_unit_date IS NULL
+                        LIMIT 1
+                    """, (wh_id, item_id, ql)).fetchone()
+
+                    if existing:
+                        conn.execute(
+                            "UPDATE inventory SET quantity=quantity+?, notes=? WHERE id=?",
+                            (so_luong, ghi_chu, existing["id"]),
+                        )
+                        updated += 1
+                    else:
+                        conn.execute("""
+                            INSERT INTO inventory
+                                (warehouse_id, item_type_id, quality_level, quantity, notes)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (wh_id, item_id, ql, so_luong, ghi_chu))
+                        inserted += 1
+                except Exception as row_err:
+                    errors.append(f"Dòng {i}: {row_err}")
+                    skipped += 1
+
+            conn.commit()
+            msg = f"Thêm mới: {inserted}   Cộng dồn: {updated}   Bỏ qua: {skipped}"
+            if errors:
+                msg += f"\n\nChi tiết lỗi:\n" + "\n".join(errors[:10])
             QMessageBox.information(self, "Nhập hoàn tất", msg)
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", str(e))

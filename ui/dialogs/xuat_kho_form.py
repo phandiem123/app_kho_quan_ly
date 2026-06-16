@@ -590,17 +590,6 @@ class XuatKhoFormDialog(QDialog):
             QPushButton:hover { background: #f5f5f5; }
         """)
         btn_cancel.clicked.connect(self.reject)
-        if self._subtype == "shared_loan":
-            btn_export_phieu = QPushButton("Xuất Phiếu Dùng Chung")
-            btn_export_phieu.setFixedHeight(36)
-            btn_export_phieu.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-            btn_export_phieu.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            btn_export_phieu.setStyleSheet("""
-                QPushButton { border: none; border-radius: 6px;
-                    padding: 0 20px; background: #2563eb; color: white; }
-                QPushButton:hover { background: #1d4ed8; }
-            """)
-            btn_export_phieu.clicked.connect(self._on_export_voucher)
         btn_save = QPushButton("Lưu")
         btn_save.setFixedHeight(36)
         btn_save.setFont(QFont(FONT, 12, QFont.Weight.Bold))
@@ -612,9 +601,6 @@ class XuatKhoFormDialog(QDialog):
         btn_save.clicked.connect(self._save)
         btn_row.addWidget(btn_cancel)
         btn_row.addSpacing(8)
-        if self._subtype == "shared_loan":
-            btn_row.addWidget(btn_export_phieu)
-            btn_row.addSpacing(8)
         btn_row.addWidget(btn_save)
         root.addLayout(btn_row)
 

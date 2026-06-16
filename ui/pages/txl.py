@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QCursor, QAction
 from database.txl import get_h4_inventory, get_all, get_lines, delete, TxlRecord
+from database.warehouses import get_all as wh_get_all
 
 FONT = "Segoe UI"
 
@@ -181,10 +182,7 @@ class TxlPage(QWidget):
         self._search.textChanged.connect(self._apply_filter)
         top.addWidget(self._search)
 
-        self._year_combo = QComboBox()
-        self._year_combo.setFixedHeight(34)
-        self._year_combo.setFont(QFont(FONT, 12))
-        self._year_combo.setStyleSheet("""
+        _combo_style = """
             QComboBox { border: 1px solid #e0e0e0; border-radius: 8px;
                 padding: 0 32px 0 12px; background: white;
                 color: #111; min-width: 120px; }
@@ -200,7 +198,23 @@ class TxlPage(QWidget):
             QComboBox QAbstractItemView { border: 1px solid #e0e0e0;
                 border-radius: 6px; background: white; color: #111;
                 selection-background-color: #f0f0f0; }
-        """)
+        """
+
+        self._wh_filter = QComboBox()
+        self._wh_filter.setFixedHeight(34)
+        self._wh_filter.setFont(QFont(FONT, 12))
+        self._wh_filter.setStyleSheet(_combo_style)
+        lbl = "Tất cả kho" if self._wh_type == "TONG" else "Tất cả đơn vị"
+        self._wh_filter.addItem(lbl, None)
+        for wh in wh_get_all(wh_type=self._wh_type):
+            self._wh_filter.addItem(wh.name, wh.id)
+        self._wh_filter.currentIndexChanged.connect(self._reload_h4)
+        top.addWidget(self._wh_filter)
+
+        self._year_combo = QComboBox()
+        self._year_combo.setFixedHeight(34)
+        self._year_combo.setFont(QFont(FONT, 12))
+        self._year_combo.setStyleSheet(_combo_style)
         from datetime import date as _date
         cur = _date.today().year
         self._year_combo.addItem("Tất cả", None)
@@ -290,12 +304,14 @@ class TxlPage(QWidget):
         if idx == 0:
             self._h4_card.show()
             self._hist_card.hide()
+            self._wh_filter.show()
             self._year_combo.hide()
             self._btn_txl.show()
             self._reload_h4()
         else:
             self._h4_card.hide()
             self._hist_card.show()
+            self._wh_filter.hide()
             self._year_combo.show()
             self._btn_txl.hide()
             self._reload_history()
@@ -324,6 +340,9 @@ class TxlPage(QWidget):
 
     def _reload_h4(self):
         items = get_h4_inventory(self._wh_type)
+        wh_id = self._wh_filter.currentData()
+        if wh_id:
+            items = [i for i in items if i.warehouse_id == wh_id]
         q = self._search.text().strip().lower()
         if q:
             items = [i for i in items if q in i.item_name.lower()
@@ -470,52 +489,30 @@ class TxlPage(QWidget):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _h4_columns(wh_type: str) -> list[str]:
-    cols = ["STT", "Kho / ĐV", "Tên Hàng", "ĐVT", "H4"]
-    if wh_type == "DON_VI":
-        cols += ["Ngày Nhận ĐV", "Niên Hạn (Năm)"]
-    cols += ["Số Lô", "Ghi Chú"]
-    return cols
+    return ["STT", "Kho / ĐV", "Tên Hàng", "ĐVT", "H4", "Ghi Chú"]
 
 
 def _h4_cells(i: int, item, show_months: bool):
-    cells = [
+    return [
         (str(i + 1), True, None),
         (item.warehouse_name, False, None),
         (item.item_name, False, None),
         (item.unit_of_measure, True, None),
         (str(item.quantity), True, None),
-    ]
-    if show_months:
-        cells.append((item.received_at_unit_date or "—", True, None))
-        mo = item.months_at_unit
-        cells.append((f"{mo // 12} năm" if mo is not None else "—", True,
-                       "red" if mo and mo >= 24 else None))
-    cells += [
-        (item.lot_number or "—", True, None),
         (item.notes or "", False, None),
     ]
-    return cells
 
 
 def _set_h4_col_widths(table: QTableWidget, wh_type: str):
     h = table.horizontalHeader()
-    modes = [
+    for i, (mode, w) in enumerate([
         (QHeaderView.ResizeMode.Fixed, 52),
         (QHeaderView.ResizeMode.Stretch, None),
         (QHeaderView.ResizeMode.Stretch, None),
         (QHeaderView.ResizeMode.Fixed, 56),
         (QHeaderView.ResizeMode.Fixed, 72),
-    ]
-    if wh_type == "DON_VI":
-        modes += [
-            (QHeaderView.ResizeMode.Fixed, 110),
-            (QHeaderView.ResizeMode.Fixed, 100),
-        ]
-    modes += [
-        (QHeaderView.ResizeMode.Fixed, 100),
         (QHeaderView.ResizeMode.Stretch, None),
-    ]
-    for i, (mode, w) in enumerate(modes):
+    ]):
         h.setSectionResizeMode(i, mode)
         if w:
             table.setColumnWidth(i, w)

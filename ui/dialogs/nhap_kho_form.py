@@ -19,29 +19,29 @@ FONT = "Segoe UI"
 
 class _DisplayItem:
     """Wrapper cho ItemType với tên hiển thị tuỳ chỉnh (thêm hậu tố DC/H4)."""
-    __slots__ = ('id', 'code', 'name', 'display_name', 'unit_of_measure', 'unit_price', 'category')
+    __slots__ = ('id', 'code', 'name', 'display_name', 'unit_of_measure', 'unit_price', 'category', 'qty')
 
-    def __init__(self, id, code, name, display_name, unit_of_measure, unit_price, category):
+    def __init__(self, id, code, name, display_name, unit_of_measure, unit_price, category, qty=0):
         self.id = id
         self.code = code
         self.name = name               # tên gốc — dùng khi lưu ReceiptLine
         self.display_name = display_name  # tên hiển thị — dùng trong combo
         self.unit_of_measure = unit_of_measure
         self.unit_price = unit_price
-        self.category = category       # 'NORMAL' | 'SHARED' | 'H4'
+        self.category = category       # 'NORMAL' | 'H4'
+        self.qty = qty                 # tổng tồn tại đơn vị
 
 
 def _get_unit_item_entries(unit_wh_id: int) -> list[_DisplayItem]:
-    """Trả về danh sách mặt hàng tồn kho tại đơn vị, gom theo 3 loại NORMAL/SHARED/H4.
-    Nếu 1 sản phẩm có nhiều loại → thêm hậu tố (DC) hoặc (H4) để phân biệt."""
+    """Trả về danh sách mặt hàng tại đơn vị, phân loại NORMAL/H4/SHARED.
+    SHARED = hàng dùng chung (is_shared=1). H4 và SHARED luôn có hậu tố."""
     import database
-    from collections import Counter
     conn = database.get_conn()
     rows = conn.execute("""
         SELECT it.id, it.code, it.name, it.unit_of_measure,
                COALESCE(it.unit_price, 0) AS unit_price,
                CASE
-                   WHEN i.is_shared = 1                     THEN 'SHARED'
+                   WHEN i.is_shared = 1                          THEN 'SHARED'
                    WHEN i.quality_level = 'H4' AND i.is_shared = 0 THEN 'H4'
                    ELSE 'NORMAL'
                END AS category,
@@ -54,17 +54,13 @@ def _get_unit_item_entries(unit_wh_id: int) -> list[_DisplayItem]:
         ORDER BY it.name, category
     """, (unit_wh_id,)).fetchall()
 
-    cat_count = Counter(r["id"] for r in rows)
     entries = []
     for r in rows:
         name = r["name"]
-        if cat_count[r["id"]] > 1:
-            if r["category"] == "SHARED":
-                display = f"{name} (DC)"
-            elif r["category"] == "H4":
-                display = f"{name} (H4)"
-            else:
-                display = name
+        if r["category"] == "SHARED":
+            display = f"{name} (DC)"
+        elif r["category"] == "H4":
+            display = f"{name} (H4)"
         else:
             display = name
         entries.append(_DisplayItem(
@@ -75,6 +71,7 @@ def _get_unit_item_entries(unit_wh_id: int) -> list[_DisplayItem]:
             unit_of_measure=r["unit_of_measure"],
             unit_price=float(r["unit_price"]),
             category=r["category"],
+            qty=int(r["total_qty"] or 0),
         ))
     return entries
 
@@ -114,11 +111,13 @@ class LineItemRow(QWidget):
 
     def __init__(self, item_types, show_price: bool = True,
                  show_quality: bool = False, max_qty_map: dict | None = None,
+                 dynamic_price_by_category: bool = False,
                  parent=None):
         super().__init__(parent)
         self._item_types = item_types
         self._show_quality = show_quality
         self._max_qty_map: dict[int, int] = max_qty_map or {}
+        self._dynamic_price_by_category = dynamic_price_by_category
         self.setStyleSheet("background: transparent;")
 
         h = QHBoxLayout(self)
@@ -238,6 +237,12 @@ class LineItemRow(QWidget):
     def _on_item_changed(self, _):
         it = self.combo.currentData()
         self.lbl_unit.setText(it.unit_of_measure if it else "—")
+        cat = self._dynamic_price_by_category and it and getattr(it, 'category', None)
+        is_h4     = (cat == 'H4')
+        is_shared = (cat == 'SHARED')
+        no_price  = is_h4 or is_shared
+
+        # Remaining quantity
         if self._max_qty_map and it:
             max_q = self._max_qty_map.get(it.id, 0)
             self.spin_qty.setRange(1, max(1, max_q))
@@ -245,15 +250,44 @@ class LineItemRow(QWidget):
                 self.spin_qty.setValue(max(1, max_q))
             self.lbl_remaining.setText(f"≤ {max_q}")
             self.lbl_remaining.setVisible(True)
-        elif not self._max_qty_map:
+        elif it and not self._max_qty_map and hasattr(it, 'qty') and it.qty > 0:
+            max_q = it.qty
+            self.spin_qty.setRange(1, max_q)
+            if self.spin_qty.value() > max_q:
+                self.spin_qty.setValue(max_q)
+            self.lbl_remaining.setText(f"≤ {max_q}")
+            self.lbl_remaining.setVisible(True)
+        else:
             self.spin_qty.setRange(1, 9_999_999)
             self.lbl_remaining.setVisible(False)
-        if self._show_price and it:
-            self._unit_price = it.unit_price or 0.0
-            self.lbl_price.setText(f"{self._unit_price:,.0f} đ" if self._unit_price else "—")
+
+        # Price display — hide for H4 and DC items
+        if self._show_price:
+            self.lbl_price.setVisible(not no_price)
+            self.lbl_total.setVisible(not no_price)
+            if not no_price and it:
+                self._unit_price = it.unit_price or 0.0
+                self.lbl_price.setText(f"{self._unit_price:,.0f} đ" if self._unit_price else "—")
+            else:
+                self._unit_price = 0.0
+                self.lbl_price.setText("—")
         else:
             self._unit_price = 0.0
             self.lbl_price.setText("—")
+
+        # Quality combo — lock to H4 for H4 items, H3 for DC items
+        if self._show_quality:
+            if is_h4 or is_shared:
+                lock_ql = "H4" if is_h4 else "H3"
+                self.combo_quality.blockSignals(True)
+                idx = self.combo_quality.findText(lock_ql)
+                if idx >= 0:
+                    self.combo_quality.setCurrentIndex(idx)
+                self.combo_quality.setEnabled(False)
+                self.combo_quality.blockSignals(False)
+            else:
+                self.combo_quality.setEnabled(True)
+
         self._recalc()
         self.item_changed.emit()
 
@@ -290,6 +324,15 @@ class LineItemRow(QWidget):
         it = self.combo.currentData()
         if not it:
             return None
+        cat = self._dynamic_price_by_category and getattr(it, 'category', None)
+        is_shared = (cat == 'SHARED')
+        is_h4     = (cat == 'H4')
+        if is_shared:
+            quality_level = "H3"
+        elif is_h4:
+            quality_level = "H4"
+        else:
+            quality_level = self.combo_quality.currentText() if self._show_quality else "H1"
         return ReceiptLine(
             item_type_id=it.id,
             item_code=it.code,
@@ -298,7 +341,8 @@ class LineItemRow(QWidget):
             quantity=self.spin_qty.value(),
             unit_price=self._unit_price,
             notes=self.edit_notes.text().strip(),
-            quality_level=self.combo_quality.currentText() if self._show_quality else "H1",
+            quality_level=quality_level,
+            is_shared=is_shared,
         )
 
     def fill(self, line: ReceiptLine):
@@ -515,7 +559,7 @@ class NhapKhoFormDialog(QDialog):
         root.addWidget(sec)
         root.addSpacing(6)
 
-        show_price   = (self._subtype == "new")
+        show_price   = (self._subtype in ("new", "from_unit"))
         show_quality = (self._subtype == "from_unit")
         self._show_price   = show_price
         self._show_quality = show_quality
@@ -527,12 +571,12 @@ class NhapKhoFormDialog(QDialog):
         ch.setContentsMargins(6, 5, 6, 5)
         ch.setSpacing(6)
         col_defs = [("Mặt Hàng", 2, None), ("ĐVT", 0, 56), ("Số lượng", 0, 80)]
-        if self._is_return_mode:
+        if self._is_return_mode or self._subtype == "from_unit":
             col_defs += [("Còn lại", 0, 66)]
         if show_quality:
             col_defs += [("Mức HH", 0, 70)]
         if show_price:
-            col_defs += [("Đơn Giá", 0, 120), ("Thành Tiền", 0, 120)]
+            col_defs += [("Đơn Giá", 0, 130), ("Thành Tiền", 0, 120)]
         col_defs += [("Ghi chú", 1, None), ("", 0, 32)]
         for txt, stretch, w in col_defs:
             l = QLabel(txt)
@@ -578,7 +622,7 @@ class NhapKhoFormDialog(QDialog):
         if show_price:
             tr = QHBoxLayout()
             tr.addStretch()
-            tc = QLabel("Tổng tiền:")
+            tc = QLabel("Tổng tiền (không tính H4):" if self._subtype == "from_unit" else "Tổng tiền:")
             tc.setFont(QFont(FONT, 12))
             tc.setStyleSheet("color: #555;")
             self._form_total_lbl = QLabel("0 đ")
@@ -800,6 +844,7 @@ class NhapKhoFormDialog(QDialog):
             show_price=self._show_price,
             show_quality=self._show_quality,
             max_qty_map={item_data["item_type_id"]: item_data["remaining_qty"]},
+            dynamic_price_by_category=(self._subtype == "from_unit"),
             parent=self,
         )
         if row.combo.count() > 0:
@@ -841,7 +886,9 @@ class NhapKhoFormDialog(QDialog):
         max_map = self._loan_max_qty_map if self._is_return_mode and self._loan_max_qty_map else {}
         row = LineItemRow(item_types, show_price=self._show_price,
                           show_quality=self._show_quality,
-                          max_qty_map=max_map or None, parent=self)
+                          max_qty_map=max_map or None,
+                          dynamic_price_by_category=(self._subtype == "from_unit"),
+                          parent=self)
         if line:
             row.fill(line)
         row.removed.connect(self._remove_line)
@@ -1006,23 +1053,34 @@ class NhapKhoFormDialog(QDialog):
         if not lines:
             self._err("Vui lòng thêm ít nhất một mặt hàng."); return None
 
+        # Separate DC lines (sẽ tạo TRA riêng) và regular/H4 lines
+        dc_lines    = [l for l in lines if l.is_shared] if self._subtype == "from_unit" else []
+        nhap_lines  = [l for l in lines if not l.is_shared]
+
+        if self._subtype == "from_unit" and not nhap_lines and not dc_lines:
+            self._err("Vui lòng thêm ít nhất một mặt hàng."); return None
+        if self._subtype == "from_unit" and not nhap_lines and dc_lines:
+            # DC-only: không tạo NHAP_KHO, chỉ tạo TRA
+            pass
+
         exclude = self._editing.id if self._editing else None
         if ref_exists(ref, exclude):
             self._err(f"Số Phiếu '{ref}' đã tồn tại."); return None
 
+        date_str = QDate.fromString(self.f_date.text(), "dd/MM/yyyy").toString("yyyy-MM-dd")
         receipt = Receipt(
             id=self._editing.id if self._editing else None,
             reference_number=ref,
             to_warehouse_id=wh_id,
             to_warehouse_name=wh_name,
             from_warehouse_id=from_wh_id,
-            transaction_date=QDate.fromString(self.f_date.text(), "dd/MM/yyyy").toString("yyyy-MM-dd"),
+            transaction_date=date_str,
             supplier=supplier,
             created_by=self.f_person.text().strip(),
             transporter=transporter,
             notes=self.f_notes.toPlainText().strip(),
             loan_transaction_id=loan_tx_id,
-            lines=lines,
+            lines=nhap_lines if self._subtype == "from_unit" else lines,
         )
         if self._subtype in ("unit_return", "event_return", "shared_return"):
             if self._subtype == "shared_return" and self._shared_source == "warehouse":
@@ -1030,11 +1088,48 @@ class NhapKhoFormDialog(QDialog):
             else:
                 receipt.tx_type = "TRA"
 
-        if self._editing:
+        if self._subtype == "from_unit" and not nhap_lines:
+            # DC-only: bỏ qua NHAP_KHO, tạo TRA cho DC rồi trả receipt giả
+            if not self._editing and dc_lines:
+                self._auto_create_tra_dc(ref, wh_id, from_wh_id, date_str,
+                                         self.f_person.text().strip(),
+                                         transporter, self.f_notes.toPlainText().strip(),
+                                         dc_lines)
+            return receipt  # receipt.lines rỗng nhưng đủ để close dialog
+        elif self._editing:
             update(receipt)
         else:
             insert(receipt)
+            if not self._editing and dc_lines:
+                self._auto_create_tra_dc(ref, wh_id, from_wh_id, date_str,
+                                         self.f_person.text().strip(),
+                                         transporter, self.f_notes.toPlainText().strip(),
+                                         dc_lines)
         return receipt
+
+    def _auto_create_tra_dc(self, base_ref, to_wh_id, from_wh_id, date_str,
+                            created_by, transporter, notes, dc_lines):
+        """Tự tạo phiếu TRA (unit_return) cho các dòng hàng DC trong from_unit."""
+        dc_ref = f"{base_ref}-DC"
+        n = 2
+        while ref_exists(dc_ref):
+            dc_ref = f"{base_ref}-DC{n}"
+            n += 1
+        tra = Receipt(
+            id=None,
+            reference_number=dc_ref,
+            to_warehouse_id=to_wh_id,
+            to_warehouse_name="",
+            from_warehouse_id=from_wh_id,
+            transaction_date=date_str,
+            supplier="",
+            created_by=created_by,
+            transporter=transporter,
+            notes=notes,
+            lines=dc_lines,
+        )
+        tra.tx_type = "TRA"
+        insert(tra)
 
     def _save(self):
         receipt = self._do_save()

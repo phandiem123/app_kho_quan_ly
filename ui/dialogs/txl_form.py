@@ -44,6 +44,12 @@ class _ItemRow(QWidget):
         h.setSpacing(8)
 
         self.chk = QCheckBox()
+        self.chk.setFixedSize(20, 20)
+        self.chk.setStyleSheet("""
+            QCheckBox::indicator { width: 16px; height: 16px;
+                border: 2px solid #888; border-radius: 3px; background: white; }
+            QCheckBox::indicator:checked { background: #111; border-color: #111; }
+        """)
         self.chk.toggled.connect(self._on_toggle)
         h.addWidget(self.chk)
 
@@ -78,25 +84,6 @@ class _ItemRow(QWidget):
         self.spin.setEnabled(False)
         h.addWidget(self.spin)
         h.addWidget(self.lbl_max)
-
-        if show_months and item.months_at_unit is not None:
-            mo = QLabel(f"{item.months_at_unit // 12} năm")
-            mo.setFont(QFont(FONT, 10))
-            mo.setFixedWidth(70)
-            mo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            mo.setStyleSheet(
-                "color: #c0392b; background: #fdecea; border-radius: 4px; padding: 1px 4px;"
-                if item.months_at_unit >= 24
-                else "color: #666;"
-            )
-            h.addWidget(mo)
-
-        if item.lot_number:
-            lot = QLabel(item.lot_number)
-            lot.setFont(QFont(FONT, 10))
-            lot.setFixedWidth(80)
-            lot.setStyleSheet("color: #888;")
-            h.addWidget(lot)
 
     def _on_toggle(self, checked: bool):
         self.spin.setEnabled(checked)

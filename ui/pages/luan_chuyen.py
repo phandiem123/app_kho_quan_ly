@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QPushButton, QLineEdit, QComboBox, QMessageBox, QMenu, QGridLayout,
+    QFileDialog,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QCursor, QAction
@@ -44,6 +45,8 @@ _BTN_DARK = """
 class _DetailPanel(QWidget):
     def __init__(self, transfer: Transfer, lines: list[TransferLine], parent=None):
         super().__init__(parent)
+        self._transfer = transfer
+        self._lines = lines
         self.setAutoFillBackground(True)
         self.setStyleSheet("""
             _DetailPanel { background: #f0f0f0; }
@@ -155,6 +158,134 @@ class _DetailPanel(QWidget):
 
         sub.setFixedHeight(36 + max(1, len(lines)) * 38)
         root.addWidget(sub)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        _BTN = """
+            QPushButton { border: 1px solid #ccc; border-radius: 6px; padding: 4px 16px;
+                background: white; color: #333; font-size: 11px; }
+            QPushButton:hover { background: #f5f5f5; }
+        """
+        btn_chi_tiet = QPushButton("Xuất Chi Tiết")
+        btn_chi_tiet.setFont(QFont(FONT, 11))
+        btn_chi_tiet.setStyleSheet(_BTN)
+        btn_chi_tiet.clicked.connect(self._export_chi_tiet)
+        btn_row.addWidget(btn_chi_tiet)
+
+        btn_phieu_nhap = QPushButton("Xuất Phiếu Nhập")
+        btn_phieu_nhap.setFont(QFont(FONT, 11))
+        btn_phieu_nhap.setStyleSheet(_BTN)
+        btn_phieu_nhap.clicked.connect(self._export_phieu_nhap)
+        btn_row.addWidget(btn_phieu_nhap)
+        root.addLayout(btn_row)
+
+    def _export_chi_tiet(self):
+        try:
+            import openpyxl
+        except ImportError:
+            QMessageBox.warning(self, "Thiếu thư viện", "Vui lòng cài đặt: pip install openpyxl")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất Chi Tiết Luân Chuyển",
+            f"chi_tiet_{self._transfer.reference_number}.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            from openpyxl.styles import Font, PatternFill, Alignment
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Chi Tiết"
+            is_kho = (self._transfer.subtype == "kho_kho")
+            src_lbl = "Kho Nguồn" if is_kho else "ĐV Nguồn"
+            dst_lbl = "Kho Đích"  if is_kho else "ĐV Đích"
+            ws.append([f"Phiếu luân chuyển: {self._transfer.reference_number}"])
+            ws.append([f"{src_lbl}: {self._transfer.from_warehouse_name}   "
+                       f"{dst_lbl}: {self._transfer.to_warehouse_name}   "
+                       f"Ngày: {self._transfer.transaction_date}"])
+            ws.append([])
+            headers = ["STT", "Tên Hàng", "ĐVT"]
+            if not is_kho:
+                headers.append("Mức HH")
+            headers += ["Số Lượng", "Ghi Chú"]
+            ws.append(headers)
+            for cell in ws[4]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill(fill_type="solid", fgColor="111111")
+                cell.alignment = Alignment(horizontal="center")
+            for i, line in enumerate(self._lines, 1):
+                row = [i, line.item_name, line.unit_of_measure]
+                if not is_kho:
+                    row.append(line.quality_level)
+                row += [line.quantity, line.notes]
+                ws.append(row)
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = min(
+                    max(len(str(c.value or "")) for c in col) + 4, 40
+                )
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(self._lines)} dòng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _export_phieu_nhap(self):
+        try:
+            import openpyxl
+        except ImportError:
+            QMessageBox.warning(self, "Thiếu thư viện", "Vui lòng cài đặt: pip install openpyxl")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất Phiếu Nhập",
+            f"phieu_nhap_{self._transfer.reference_number}.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Phiếu Nhập"
+            is_kho = (self._transfer.subtype == "kho_kho")
+            ws.merge_cells("A1:F1")
+            ws["A1"] = "PHIẾU NHẬP KHO"
+            ws["A1"].font = Font(bold=True, size=14)
+            ws["A1"].alignment = Alignment(horizontal="center")
+            ws.append([])
+            ws.append([f"Số phiếu: {self._transfer.reference_number}",
+                       "", "", f"Ngày: {self._transfer.transaction_date}"])
+            dst_lbl = "Kho Nhận" if is_kho else "Đơn Vị Nhận"
+            ws.append([f"{dst_lbl}: {self._transfer.to_warehouse_name}"])
+            ws.append([f"Người lập: {self._transfer.created_by}"])
+            ws.append([])
+            headers = ["STT", "Tên Hàng", "ĐVT"]
+            if not is_kho:
+                headers.append("Mức HH")
+            headers += ["Số Lượng", "Ghi Chú"]
+            ws.append(headers)
+            hdr_row = ws.max_row
+            for cell in ws[hdr_row]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill(fill_type="solid", fgColor="333333")
+                cell.alignment = Alignment(horizontal="center")
+            thin = Side(style="thin")
+            for i, line in enumerate(self._lines, 1):
+                row_data = [i, line.item_name, line.unit_of_measure]
+                if not is_kho:
+                    row_data.append(line.quality_level)
+                row_data += [line.quantity, line.notes]
+                ws.append(row_data)
+                for cell in ws[ws.max_row]:
+                    cell.border = Border(bottom=Side(style="hair"))
+            ws.append([])
+            ws.append(["Người giao", "", "Người nhận", "", "Thủ kho"])
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = min(
+                    max(len(str(c.value or "")) for c in col) + 4, 40
+                )
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất phiếu nhập.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
 
 
 # ── Main Page ─────────────────────────────────────────────────────────────────
@@ -405,7 +536,7 @@ class LuanChuyenPage(QWidget):
         transfer = self._records_order[data_idx]
         lines = get_lines(transfer.id)
         panel = _DetailPanel(transfer, lines)
-        h = 180 + max(1, len(lines)) * 38
+        h = 220 + max(1, len(lines)) * 38
         self._table.setCellWidget(det_row, 0, panel)
         self._table.setRowHeight(det_row, h)
         self._expanded_data_row = row

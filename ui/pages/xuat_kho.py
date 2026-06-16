@@ -133,7 +133,7 @@ class DetailPanel(QWidget):
         btn_excel.clicked.connect(self._export_excel)
         top.addWidget(btn_excel)
 
-        if issue.subtype == "to_unit":
+        if issue.subtype in ("to_unit", "shared_loan"):
             top.addSpacing(6)
             btn_print = QPushButton("Xuất Phiếu Xuất")
             btn_print.setFixedHeight(30)
