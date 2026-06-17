@@ -35,6 +35,41 @@ _BADGE = {
     "H4": ("H4", "#c0392b", "#fdecea"),
 }
 
+_EXPORT_BTN_STYLE = """
+    QPushButton { border: 1px solid #d0d0d0; border-radius: 8px; padding: 0 16px;
+        font-size: 12px; font-weight: 600; background: #f5f5f5; color: #444; }
+    QPushButton:hover { background: #e8e8e8; }
+"""
+
+
+def _check_openpyxl(parent: QWidget) -> bool:
+    try:
+        import openpyxl  # noqa: F401
+        return True
+    except ImportError:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(
+            parent, "Thiếu thư viện",
+            "Vui lòng cài đặt:\n\npip install openpyxl"
+        )
+        return False
+
+
+def _write_xlsx_header(ws, headers: list[str]):
+    from openpyxl.styles import Font, PatternFill, Alignment
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = PatternFill(fill_type="solid", fgColor="111111")
+        cell.font = Font(bold=True, color="FFFFFF", name="Calibri")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 20
+
+
+def _auto_width_xlsx(ws):
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=0)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
 
 class _SmartHeader(QHeaderView):
     """Header với sort arrows, eye-icon ẩn/hiện, và drag reorder."""
@@ -1663,6 +1698,18 @@ class ThongKeKhoPage(QWidget):
         card_h.addWidget(self._local_search)
 
         root.addLayout(card_h)
+        root.addSpacing(10)
+
+        export_h = QHBoxLayout()
+        export_h.addStretch()
+        self._export_btn = QPushButton("Xuất Excel")
+        self._export_btn.setFixedHeight(34)
+        self._export_btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        self._export_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._export_btn.setStyleSheet(_EXPORT_BTN_STYLE)
+        self._export_btn.clicked.connect(self._export_excel)
+        export_h.addWidget(self._export_btn)
+        root.addLayout(export_h)
         root.addSpacing(16)
 
         # ── Table ──────────────────────────────────────────────────────────
@@ -2075,6 +2122,39 @@ class ThongKeKhoPage(QWidget):
             return rows
         return sorted(rows, key=fn, reverse=not asc)
 
+    def _export_excel(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self):
+            return
+        if self._active_wh_id is None or not self._raw:
+            QMessageBox.information(self, "Xuất Excel", "Không có dữ liệu để xuất.")
+            return
+        wh_name = next((r["name"] for r in self._wh_list if r["id"] == self._active_wh_id), "Kho")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất Excel", f"ton_kho_{wh_name}.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = (wh_name or "Tồn Kho")[:31]
+
+        rows = self._sort_rows(self._raw, search_mode=False)
+        _write_xlsx_header(ws, self._COLS)
+        for i, r in enumerate(rows, start=1):
+            mm = r["total_lifespan_months"]
+            ws.append([
+                i, r["item_name"], r["unit_of_measure"],
+                mm // 12 if mm else "",
+                r["don_gia"] or "",
+                r["h1"], r["h2"], r["h3"], r["h4"], r["total"],
+            ])
+        _auto_width_xlsx(ws)
+        wb.save(path)
+        QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
+
     def _on_sort(self, logical: int, ascending: bool):
         if self._was_searching:
             self._sort_s_col = logical
@@ -2240,6 +2320,15 @@ class ThongKeDonViPage(QWidget):
         """)
         self._local_search.textChanged.connect(self._apply_local_filter)
         card_h.addWidget(self._local_search)
+
+        self._export_btn = QPushButton("Xuất Excel")
+        self._export_btn.setFixedHeight(34)
+        self._export_btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        self._export_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._export_btn.setStyleSheet(_EXPORT_BTN_STYLE)
+        self._export_btn.clicked.connect(self._export_excel)
+        card_h.addWidget(self._export_btn)
+
         root.addLayout(card_h)
         root.addSpacing(16)
 
@@ -2651,6 +2740,36 @@ class ThongKeDonViPage(QWidget):
         if fn is None:
             return rows
         return sorted(rows, key=fn, reverse=not asc)
+
+    def _export_excel(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self):
+            return
+        if self._active_wh_id is None or not self._raw:
+            QMessageBox.information(self, "Xuất Excel", "Không có dữ liệu để xuất.")
+            return
+        wh_name = next((r["name"] for r in self._wh_list if r["id"] == self._active_wh_id), "Đơn Vị")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất Excel", f"ton_kho_{wh_name}.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = (wh_name or "Tồn Kho")[:31]
+
+        rows = self._sort_rows(self._raw, search_mode=False)
+        _write_xlsx_header(ws, self._COLS)
+        for i, r in enumerate(rows, start=1):
+            ws.append([
+                i, r["item_name"], r["unit_of_measure"],
+                r["h1"], r["h2"], r["h3"], r["h4"], r["total"],
+            ])
+        _auto_width_xlsx(ws)
+        wb.save(path)
+        QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
 
     def _on_sort(self, logical: int, ascending: bool):
         if self._was_searching:

@@ -246,6 +246,7 @@ class ExportImportPage(QWidget):
             "Nhập số lượng tồn kho ban đầu từ Excel cho từng kho/đơn vị, mặt hàng, mức HH.",
             "Nhập từ Excel", self._import_inventory,
             secondary_label="Tải Mẫu", secondary_cb=self._template_inventory,
+            tertiary_label="Xuất Excel", tertiary_cb=self._export_inventory,
         ))
         import_row3.addStretch()
         v.addLayout(import_row3)
