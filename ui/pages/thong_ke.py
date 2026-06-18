@@ -83,6 +83,13 @@ def _find_col(header: list[str], *keywords) -> int | None:
     return None
 
 
+def _az_key(name: str) -> str:
+    """Sort key: bỏ dấu tiếng Việt, chữ thường — cho phép sort A→Z theo ký tự cơ bản."""
+    import unicodedata
+    nfd = unicodedata.normalize("NFD", str(name or "").lower())
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+
+
 class _SmartHeader(QHeaderView):
     """Header với sort arrows, eye-icon ẩn/hiện, và drag reorder."""
     sortRequested = pyqtSignal(int, bool)   # (logical_col, ascending)
@@ -2151,10 +2158,13 @@ class ThongKeKhoPage(QWidget):
         try:
             import openpyxl
             conn = database.get_conn()
-            items = conn.execute(
-                "SELECT name, unit_of_measure, total_lifespan_months, unit_price"
-                " FROM item_types WHERE is_active=1 ORDER BY name"
-            ).fetchall()
+            items = sorted(
+                conn.execute(
+                    "SELECT name, unit_of_measure, total_lifespan_months, unit_price"
+                    " FROM item_types WHERE is_active=1"
+                ).fetchall(),
+                key=lambda r: _az_key(r["name"]),
+            )
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Tồn Kho"
@@ -2905,9 +2915,12 @@ class ThongKeDonViPage(QWidget):
         try:
             import openpyxl
             conn = database.get_conn()
-            items = conn.execute(
-                "SELECT name, unit_of_measure FROM item_types WHERE is_active=1 ORDER BY name"
-            ).fetchall()
+            items = sorted(
+                conn.execute(
+                    "SELECT name, unit_of_measure FROM item_types WHERE is_active=1"
+                ).fetchall(),
+                key=lambda r: _az_key(r["name"]),
+            )
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Tồn Kho Đơn Vị"
