@@ -84,7 +84,9 @@ class MainWindow(QMainWindow):
             if factory is None:
                 return
             self._add_page(key, factory())
-        page = self.stack.widget(self._pages[key])
+        scroll = self.stack.widget(self._pages[key])
+        # _add_page wraps every page in a QScrollArea — get the actual inner widget
+        page = scroll.widget() if hasattr(scroll, "widget") else scroll
         if hasattr(page, "refresh"):
             page.refresh()
         self.stack.setCurrentIndex(self._pages[key])

@@ -1058,6 +1058,8 @@ class ExportImportPage(QWidget):
             return
         try:
             import openpyxl
+            import unicodedata
+
             wb = openpyxl.load_workbook(path)
             ws = wb.active
             all_rows = list(ws.iter_rows(min_row=1, values_only=True))
@@ -1066,11 +1068,27 @@ class ExportImportPage(QWidget):
                 QMessageBox.warning(self, "Lỗi", "File Excel trống.")
                 return
 
-            # Detect format from header row:
-            # Export format: [Mã Kho, Tên Kho, Loại, Địa Chỉ, Ghi Chú, Trạng Thái]
-            # Template format: [Tên Kho *, Loại *, Địa Chỉ, Ghi Chú]
-            header0 = str(all_rows[0][0]).strip().lower() if all_rows[0] and all_rows[0][0] else ""
-            has_code_col = "mã kho" in header0 or "ma kho" in header0
+            def _nfc(v) -> str:
+                return unicodedata.normalize('NFC', str(v or '').strip().lower())
+
+            def parse_type(v) -> str:
+                """Accept TONG/DON_VI and common Vietnamese variants."""
+                s = _nfc(v)
+                if s in ("tong", "kho tong", "kho_tong"):
+                    return "TONG"
+                if s in ("don_vi", "don vi", "donvi", "dv"):
+                    return "DON_VI"
+                # Fall back to uppercase (handles "TONG"/"DON_VI" directly)
+                return str(v or '').strip().upper()
+
+            # Detect format:
+            # Export format (6 cols): [Mã Kho, Tên Kho, Loại, Địa Chỉ, Ghi Chú, Trạng Thái]
+            # Template format (4 cols): [Tên Kho *, Loại *, Địa Chỉ, Ghi Chú]
+            # Strategy: check by column count (reliable) + first-cell content
+            header = all_rows[0]
+            non_empty_cols = sum(1 for c in header if c is not None and str(c).strip())
+            header0_nfc = _nfc(header[0]) if header and header[0] else ""
+            has_code_col = non_empty_cols >= 6 or "mã kho" in header0_nfc
 
             rows = all_rows[1:]  # skip header
 
@@ -1087,24 +1105,25 @@ class ExportImportPage(QWidget):
                         # Export format: [code, name, type, address, notes, status]
                         code    = str(row[0]).strip() if row[0] else ""
                         name    = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-                        wh_type = str(row[2]).strip().upper() if len(row) > 2 and row[2] else ""
+                        wh_type = parse_type(row[2]) if len(row) > 2 and row[2] else ""
                         address = str(row[3]).strip() if len(row) > 3 and row[3] else ""
                         notes   = str(row[4]).strip() if len(row) > 4 and row[4] else ""
                         status  = str(row[5]).strip() if len(row) > 5 and row[5] else ""
-                        is_active = 0 if status == "Đã ẩn" else 1
+                        is_active = 0 if _nfc(status) == _nfc("Đã ẩn") else 1
                     else:
                         # Template format: [name, type, address, notes]
                         code    = ""
                         name    = str(row[0]).strip() if row[0] else ""
-                        wh_type = str(row[1]).strip().upper() if len(row) > 1 and row[1] else ""
+                        wh_type = parse_type(row[1]) if len(row) > 1 and row[1] else ""
                         address = str(row[2]).strip() if len(row) > 2 and row[2] else ""
                         notes   = str(row[3]).strip() if len(row) > 3 and row[3] else ""
                         is_active = 1
 
                     if not name or wh_type not in VALID_TYPES:
                         errors.append(
-                            f"Dòng {i}: thiếu hoặc sai dữ liệu "
-                            f"(Loại phải là TONG hoặc DON_VI)"
+                            f"Dòng {i}: bỏ qua – "
+                            f"tên='{name}', loại='{wh_type}' "
+                            f"(loại phải là TONG hoặc DON_VI)"
                         )
                         skipped += 1
                         continue
@@ -1148,7 +1167,7 @@ class ExportImportPage(QWidget):
 
             msg = f"Thêm mới: {inserted}   Cập nhật: {updated}   Bỏ qua: {skipped}"
             if errors:
-                msg += "\n\nChi tiết lỗi:\n" + "\n".join(errors[:10])
+                msg += f"\n\nChi tiết ({len(errors)} dòng lỗi):\n" + "\n".join(errors[:15])
             QMessageBox.information(self, "Nhập hoàn tất", msg)
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", str(e))
