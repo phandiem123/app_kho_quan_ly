@@ -1027,7 +1027,19 @@ class ExportImportPage(QWidget):
             import openpyxl
             wb = openpyxl.load_workbook(path)
             ws = wb.active
-            rows = list(ws.iter_rows(min_row=2, values_only=True))
+            all_rows = list(ws.iter_rows(min_row=1, values_only=True))
+
+            if not all_rows:
+                QMessageBox.warning(self, "Lỗi", "File Excel trống.")
+                return
+
+            # Detect format from header row:
+            # Export format: [Mã Kho, Tên Kho, Loại, Địa Chỉ, Ghi Chú, Trạng Thái]
+            # Template format: [Tên Kho *, Loại *, Địa Chỉ, Ghi Chú]
+            header0 = str(all_rows[0][0]).strip().lower() if all_rows[0] and all_rows[0][0] else ""
+            has_code_col = "mã kho" in header0 or "ma kho" in header0
+
+            rows = all_rows[1:]  # skip header
 
             conn = database.get_conn()
             inserted = updated = skipped = 0
@@ -1038,11 +1050,23 @@ class ExportImportPage(QWidget):
                 if not row or not row[0]:
                     continue
                 try:
-                    # Format: [name, type, address, notes]
-                    name    = str(row[0]).strip() if row[0] else ""
-                    wh_type = str(row[1]).strip().upper() if row[1] else ""
-                    address = str(row[2]).strip() if len(row) > 2 and row[2] else ""
-                    notes   = str(row[3]).strip() if len(row) > 3 and row[3] else ""
+                    if has_code_col:
+                        # Export format: [code, name, type, address, notes, status]
+                        code    = str(row[0]).strip() if row[0] else ""
+                        name    = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+                        wh_type = str(row[2]).strip().upper() if len(row) > 2 and row[2] else ""
+                        address = str(row[3]).strip() if len(row) > 3 and row[3] else ""
+                        notes   = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+                        status  = str(row[5]).strip() if len(row) > 5 and row[5] else ""
+                        is_active = 0 if status == "Đã ẩn" else 1
+                    else:
+                        # Template format: [name, type, address, notes]
+                        code    = ""
+                        name    = str(row[0]).strip() if row[0] else ""
+                        wh_type = str(row[1]).strip().upper() if len(row) > 1 and row[1] else ""
+                        address = str(row[2]).strip() if len(row) > 2 and row[2] else ""
+                        notes   = str(row[3]).strip() if len(row) > 3 and row[3] else ""
+                        is_active = 1
 
                     if not name or wh_type not in VALID_TYPES:
                         errors.append(
@@ -1052,24 +1076,31 @@ class ExportImportPage(QWidget):
                         skipped += 1
                         continue
 
-                    existing = conn.execute(
-                        "SELECT id FROM warehouses WHERE name=?", (name,)
-                    ).fetchone()
+                    # Lookup by code (reliable) if available, else by name
+                    if code:
+                        existing = conn.execute(
+                            "SELECT id FROM warehouses WHERE code=?", (code,)
+                        ).fetchone()
+                    else:
+                        existing = conn.execute(
+                            "SELECT id FROM warehouses WHERE name=?", (name,)
+                        ).fetchone()
 
                     if existing:
                         conn.execute(
-                            "UPDATE warehouses SET type=?, address=?, notes=?"
-                            " WHERE name=?",
-                            (wh_type, address, notes, name),
+                            "UPDATE warehouses SET name=?, type=?, address=?, notes=?, is_active=?"
+                            " WHERE id=?",
+                            (name, wh_type, address, notes, is_active, existing["id"]),
                         )
                         updated += 1
                     else:
-                        n = 1
-                        while True:
-                            code = f"KHO{n:04d}"
-                            if not conn.execute("SELECT 1 FROM warehouses WHERE code=?", (code,)).fetchone():
-                                break
-                            n += 1
+                        if not code:
+                            n = 1
+                            while True:
+                                code = f"KHO{n:04d}"
+                                if not conn.execute("SELECT 1 FROM warehouses WHERE code=?", (code,)).fetchone():
+                                    break
+                                n += 1
                         conn.execute(
                             "INSERT INTO warehouses (code, name, type, address, notes)"
                             " VALUES (?,?,?,?,?)",
