@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+import unicodedata
 import database
 
 
@@ -15,13 +16,18 @@ class ItemType:
     id: int | None = None
 
 
+def _az_key(name: str) -> str:
+    nfd = unicodedata.normalize("NFD", str(name or "").lower())
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+
+
 def get_all(active_only: bool = True) -> list[ItemType]:
     conn = database.get_conn()
     where = "WHERE is_active = 1" if active_only else ""
     rows = conn.execute(
-        f"SELECT * FROM item_types {where} ORDER BY name"
+        f"SELECT * FROM item_types {where}"
     ).fetchall()
-    return [
+    items = [
         ItemType(
             id=r["id"], code=r["code"], name=r["name"],
             unit_of_measure=r["unit_of_measure"],
@@ -32,6 +38,7 @@ def get_all(active_only: bool = True) -> list[ItemType]:
         )
         for r in rows
     ]
+    return sorted(items, key=lambda it: _az_key(it.name))
 
 
 def code_exists(code: str, exclude_id: int | None = None) -> bool:
