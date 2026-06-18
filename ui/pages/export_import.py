@@ -336,12 +336,12 @@ class ExportImportPage(QWidget):
             ws.title = "Mặt Hàng"
 
             _write_header(ws, [
-                "Tên Hàng", "Đơn Vị Tính",
+                "Mã Hàng", "Tên Hàng", "Đơn Vị Tính",
                 "Niên Hạn (Năm)", "Đơn Giá", "Ghi Chú", "Trạng Thái",
             ])
             for r in rows:
                 ws.append([
-                    r["name"], r["unit_of_measure"],
+                    r["code"], r["name"], r["unit_of_measure"],
                     round((r["total_lifespan_months"] or 0) / 12.0, 1),
                     float(r["unit_price"] or 0),
                     r["notes"] or "",
@@ -955,7 +955,19 @@ class ExportImportPage(QWidget):
             import openpyxl
             wb = openpyxl.load_workbook(path)
             ws = wb.active
-            rows = list(ws.iter_rows(min_row=2, values_only=True))
+            all_rows = list(ws.iter_rows(min_row=1, values_only=True))
+
+            if not all_rows:
+                QMessageBox.warning(self, "Lỗi", "File Excel trống.")
+                return
+
+            # Detect format from header row:
+            # Export format: [Mã Hàng, Tên Hàng, ĐVT, Niên Hạn, Đơn Giá, Ghi Chú, Trạng Thái]
+            # Template format: [Tên Hàng *, ĐVT *, Niên Hạn *, Đơn Giá, Ghi Chú]
+            header0 = str(all_rows[0][0]).strip().lower() if all_rows[0] and all_rows[0][0] else ""
+            has_code_col = "mã hàng" in header0 or "ma hang" in header0
+
+            rows = all_rows[1:]  # skip header
 
             conn = database.get_conn()
             inserted = updated = skipped = 0
@@ -965,36 +977,57 @@ class ExportImportPage(QWidget):
                 if not row or not row[0]:
                     continue
                 try:
-                    # Format: [name, uom, lifespan_years, price, notes]
-                    name  = str(row[0]).strip() if row[0] else ""
-                    uom   = str(row[1]).strip() if row[1] else ""
-                    life  = int(round(float(row[2]) * 12)) if row[2] else 0
-                    price = float(row[3]) if row[3] else 0.0
-                    notes = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+                    if has_code_col:
+                        # Export format: [code, name, uom, lifespan, price, notes, status]
+                        code  = str(row[0]).strip() if row[0] else ""
+                        name  = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+                        uom   = str(row[2]).strip() if len(row) > 2 and row[2] else ""
+                        life  = int(round(float(row[3]) * 12)) if len(row) > 3 and row[3] is not None else 0
+                        price = float(row[4]) if len(row) > 4 and row[4] is not None else 0.0
+                        notes = str(row[5]).strip() if len(row) > 5 and row[5] else ""
+                        status = str(row[6]).strip() if len(row) > 6 and row[6] else ""
+                        is_active = 0 if status == "Đã ẩn" else 1
+                    else:
+                        # Template format: [name, uom, lifespan, price, notes]
+                        code  = ""
+                        name  = str(row[0]).strip() if row[0] else ""
+                        uom   = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+                        life  = int(round(float(row[2]) * 12)) if len(row) > 2 and row[2] is not None else 0
+                        price = float(row[3]) if len(row) > 3 and row[3] is not None else 0.0
+                        notes = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+                        is_active = 1
 
                     if not name or not uom or not life:
                         errors.append(f"Dòng {i}: thiếu dữ liệu bắt buộc")
                         skipped += 1
                         continue
 
-                    existing = conn.execute(
-                        "SELECT id FROM item_types WHERE name=?", (name,)
-                    ).fetchone()
+                    # Lookup by code (reliable) if available, else by name
+                    if code:
+                        existing = conn.execute(
+                            "SELECT id FROM item_types WHERE code=?", (code,)
+                        ).fetchone()
+                    else:
+                        existing = conn.execute(
+                            "SELECT id FROM item_types WHERE name=?", (name,)
+                        ).fetchone()
 
                     if existing:
                         conn.execute(
-                            "UPDATE item_types SET unit_of_measure=?,"
-                            " total_lifespan_months=?, unit_price=?, notes=? WHERE name=?",
-                            (uom, life, price, notes, name),
+                            "UPDATE item_types SET name=?, unit_of_measure=?,"
+                            " total_lifespan_months=?, unit_price=?, notes=?, is_active=?"
+                            " WHERE id=?",
+                            (name, uom, life, price, notes, is_active, existing["id"]),
                         )
                         updated += 1
                     else:
-                        n = 1
-                        while True:
-                            code = f"HH{n:04d}"
-                            if not conn.execute("SELECT 1 FROM item_types WHERE code=?", (code,)).fetchone():
-                                break
-                            n += 1
+                        if not code:
+                            n = 1
+                            while True:
+                                code = f"HH{n:04d}"
+                                if not conn.execute("SELECT 1 FROM item_types WHERE code=?", (code,)).fetchone():
+                                    break
+                                n += 1
                         conn.execute(
                             "INSERT INTO item_types (code, name, unit_of_measure,"
                             " total_lifespan_months, unit_price, notes)"
