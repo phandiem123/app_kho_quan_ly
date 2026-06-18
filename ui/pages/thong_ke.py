@@ -2150,15 +2150,23 @@ class ThongKeKhoPage(QWidget):
             return
         try:
             import openpyxl
+            conn = database.get_conn()
+            items = conn.execute(
+                "SELECT name, unit_of_measure, total_lifespan_months, unit_price"
+                " FROM item_types WHERE is_active=1 ORDER BY name"
+            ).fetchall()
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Tồn Kho"
-            _write_xlsx_header(ws, ["Tên Hàng *", "Mức HH * (H1/H2/H3/H4)", "Số Lượng *", "Ghi Chú"])
-            ws.append(["Súng AK47", "H1", 50, ""])
-            ws.append(["Súng AK47", "H2", 10, "Lô cũ"])
+            _write_xlsx_header(ws, ["STT", "Tên hàng", "ĐVT", "Niên hạn (Năm)", "Đơn giá", "H1", "H2", "H3", "H4", "Tổng"])
+            for i, r in enumerate(items, 1):
+                mm = r["total_lifespan_months"]
+                ws.append([i, r["name"], r["unit_of_measure"] or "",
+                           mm // 12 if mm else "", r["unit_price"] or "",
+                           "", "", "", "", ""])
             _auto_width_xlsx(ws)
             wb.save(path)
-            QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
+            QMessageBox.information(self, "Đã lưu", f"File mẫu ({len(items)} mặt hàng):\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", str(e))
 
@@ -2181,66 +2189,76 @@ class ThongKeKhoPage(QWidget):
                 return
 
             hdr = [str(c or "").strip() for c in all_rows[0]]
-            i_ten = _find_col(hdr, "tên hàng", "ten hang") or 0
-            i_ql  = _find_col(hdr, "mức hh", "muc hh", "chất lượng") or 1
-            i_sl  = _find_col(hdr, "số lượng", "so luong") or 2
-            i_ghu = _find_col(hdr, "ghi chú", "ghi chu")
+            i_ten = _find_col(hdr, "tên hàng", "ten hang") or 1
+            i_h1  = _find_col(hdr, "h1")
+            i_h2  = _find_col(hdr, "h2")
+            i_h3  = _find_col(hdr, "h3")
+            i_h4  = _find_col(hdr, "h4")
+            # Fallback nếu không có header H1-H4
+            if i_h1 is None: i_h1 = 5
+            if i_h2 is None: i_h2 = 6
+            if i_h3 is None: i_h3 = 7
+            if i_h4 is None: i_h4 = 8
 
             conn = database.get_conn()
             item_map = {r["name"]: r["id"] for r in conn.execute(
                 "SELECT id, name FROM item_types WHERE is_active=1"
             ).fetchall()}
-            VALID_QL = {"H1", "H2", "H3", "H4"}
             inserted = updated = skipped = 0
             errors = []
+
+            def _qty(row, idx):
+                v = row[idx] if len(row) > idx else None
+                if v is None or str(v).strip() == "":
+                    return 0
+                try:
+                    return int(float(str(v)))
+                except (ValueError, TypeError):
+                    return 0
 
             for i, row in enumerate(all_rows[1:], start=2):
                 if not row or not row[i_ten]:
                     continue
-                try:
-                    ten_hang = str(row[i_ten]).strip() if row[i_ten] else ""
-                    ql       = str(row[i_ql]).strip().upper() if len(row) > i_ql and row[i_ql] else ""
-                    sl_raw   = row[i_sl] if len(row) > i_sl else None
-                    so_luong = int(sl_raw) if sl_raw is not None else 0
-                    ghi_chu  = str(row[i_ghu]).strip() if i_ghu is not None and len(row) > i_ghu and row[i_ghu] else ""
-
-                    if not ten_hang or ql not in VALID_QL or so_luong <= 0:
-                        errors.append(f"Dòng {i}: thiếu hoặc sai dữ liệu (cần Tên Hàng, Mức HH H1-H4, Số Lượng > 0)")
-                        skipped += 1
-                        continue
-                    if ten_hang not in item_map:
-                        errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
-                        skipped += 1
-                        continue
-
-                    item_id = item_map[ten_hang]
-                    existing = conn.execute("""
-                        SELECT id FROM inventory
-                        WHERE warehouse_id=? AND item_type_id=?
-                          AND quality_level=? AND is_shared=0
-                          AND received_at_unit_date IS NULL
-                        LIMIT 1
-                    """, (self._active_wh_id, item_id, ql)).fetchone()
-
-                    if existing:
-                        conn.execute(
-                            "UPDATE inventory SET quantity=quantity+?, notes=? WHERE id=?",
-                            (so_luong, ghi_chu, existing["id"]),
-                        )
-                        updated += 1
-                    else:
-                        conn.execute(
-                            "INSERT INTO inventory (warehouse_id, item_type_id, quality_level, quantity, notes)"
-                            " VALUES (?, ?, ?, ?, ?)",
-                            (self._active_wh_id, item_id, ql, so_luong, ghi_chu),
-                        )
-                        inserted += 1
-                except Exception as row_err:
-                    errors.append(f"Dòng {i}: {row_err}")
+                ten_hang = str(row[i_ten]).strip()
+                if not ten_hang:
+                    continue
+                if ten_hang not in item_map:
+                    errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
                     skipped += 1
+                    continue
+
+                item_id = item_map[ten_hang]
+                for ql, idx in [("H1", i_h1), ("H2", i_h2), ("H3", i_h3), ("H4", i_h4)]:
+                    sl = _qty(row, idx)
+                    if sl <= 0:
+                        continue
+                    try:
+                        existing = conn.execute("""
+                            SELECT id FROM inventory
+                            WHERE warehouse_id=? AND item_type_id=?
+                              AND quality_level=? AND is_shared=0
+                              AND received_at_unit_date IS NULL
+                            LIMIT 1
+                        """, (self._active_wh_id, item_id, ql)).fetchone()
+                        if existing:
+                            conn.execute(
+                                "UPDATE inventory SET quantity=? WHERE id=?",
+                                (sl, existing["id"]),
+                            )
+                            updated += 1
+                        else:
+                            conn.execute(
+                                "INSERT INTO inventory (warehouse_id, item_type_id, quality_level, quantity)"
+                                " VALUES (?, ?, ?, ?)",
+                                (self._active_wh_id, item_id, ql, sl),
+                            )
+                            inserted += 1
+                    except Exception as row_err:
+                        errors.append(f"Dòng {i} {ql}: {row_err}")
+                        skipped += 1
 
             conn.commit()
-            msg = f"Thêm mới: {inserted}   Cộng dồn: {updated}   Bỏ qua: {skipped}"
+            msg = f"Thêm mới: {inserted}   Cập nhật: {updated}   Bỏ qua: {skipped}"
             if errors:
                 msg += "\n\nChi tiết lỗi:\n" + "\n".join(errors[:10])
             QMessageBox.information(self, "Nhập hoàn tất", msg)
@@ -2886,21 +2904,19 @@ class ThongKeDonViPage(QWidget):
             return
         try:
             import openpyxl
+            conn = database.get_conn()
+            items = conn.execute(
+                "SELECT name, unit_of_measure FROM item_types WHERE is_active=1 ORDER BY name"
+            ).fetchall()
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Tồn Kho Đơn Vị"
-            _write_xlsx_header(ws, [
-                "Tên Hàng *",
-                "Mức HH * (H1/H2/H3/H4)",
-                "Số Lượng *",
-                "Ngày Nhập ĐV (yyyy-mm-dd)",
-                "Ghi Chú",
-            ])
-            ws.append(["Súng AK47", "H1", 20, "2024-01-15", ""])
-            ws.append(["Súng AK47", "H2", 5, "2023-06-01", "Lô cũ"])
+            _write_xlsx_header(ws, ["STT", "Tên hàng", "ĐVT", "H1", "H2", "H3", "H4", "Tổng", "Ngày Nhập ĐV (yyyy-mm-dd)"])
+            for i, r in enumerate(items, 1):
+                ws.append([i, r["name"], r["unit_of_measure"] or "", "", "", "", "", "", ""])
             _auto_width_xlsx(ws)
             wb.save(path)
-            QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
+            QMessageBox.information(self, "Đã lưu", f"File mẫu ({len(items)} mặt hàng):\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", str(e))
 
@@ -2916,6 +2932,7 @@ class ThongKeDonViPage(QWidget):
             return
         try:
             import openpyxl
+            from datetime import date as _date
             wb = openpyxl.load_workbook(path)
             ws = wb.active
             all_rows = list(ws.iter_rows(min_row=1, values_only=True))
@@ -2923,66 +2940,78 @@ class ThongKeDonViPage(QWidget):
                 return
 
             hdr = [str(c or "").strip() for c in all_rows[0]]
-            i_ten  = _find_col(hdr, "tên hàng", "ten hang") or 0
-            i_ql   = _find_col(hdr, "mức hh", "muc hh", "chất lượng") or 1
-            i_sl   = _find_col(hdr, "số lượng", "so luong") or 2
+            i_ten  = _find_col(hdr, "tên hàng", "ten hang") or 1
+            i_h1   = _find_col(hdr, "h1")
+            i_h2   = _find_col(hdr, "h2")
+            i_h3   = _find_col(hdr, "h3")
+            i_h4   = _find_col(hdr, "h4")
             i_ngay = _find_col(hdr, "ngày nhập", "ngay nhap")
-            i_ghu  = _find_col(hdr, "ghi chú", "ghi chu")
+            if i_h1 is None: i_h1 = 3
+            if i_h2 is None: i_h2 = 4
+            if i_h3 is None: i_h3 = 5
+            if i_h4 is None: i_h4 = 6
 
             conn = database.get_conn()
             item_map = {r["name"]: r["id"] for r in conn.execute(
                 "SELECT id, name FROM item_types WHERE is_active=1"
             ).fetchall()}
-            VALID_QL = {"H1", "H2", "H3", "H4"}
             inserted = updated = skipped = 0
             errors = []
+
+            def _qty(row, idx):
+                v = row[idx] if len(row) > idx else None
+                if v is None or str(v).strip() == "":
+                    return 0
+                try:
+                    return int(float(str(v)))
+                except (ValueError, TypeError):
+                    return 0
+
+            today = str(_date.today())
 
             for i, row in enumerate(all_rows[1:], start=2):
                 if not row or not row[i_ten]:
                     continue
-                try:
-                    ten_hang  = str(row[i_ten]).strip() if row[i_ten] else ""
-                    ql        = str(row[i_ql]).strip().upper() if len(row) > i_ql and row[i_ql] else ""
-                    sl_raw    = row[i_sl] if len(row) > i_sl else None
-                    so_luong  = int(sl_raw) if sl_raw is not None else 0
-                    ngay_nhap = str(row[i_ngay]).strip() if i_ngay is not None and len(row) > i_ngay and row[i_ngay] else None
-                    ghi_chu   = str(row[i_ghu]).strip() if i_ghu is not None and len(row) > i_ghu and row[i_ghu] else ""
-
-                    if not ten_hang or ql not in VALID_QL or so_luong <= 0:
-                        errors.append(f"Dòng {i}: thiếu hoặc sai dữ liệu (cần Tên Hàng, Mức HH H1-H4, Số Lượng > 0)")
-                        skipped += 1
-                        continue
-                    if ten_hang not in item_map:
-                        errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
-                        skipped += 1
-                        continue
-
-                    item_id = item_map[ten_hang]
-                    existing = conn.execute("""
-                        SELECT id FROM inventory
-                        WHERE warehouse_id=? AND item_type_id=?
-                          AND quality_level=? AND is_shared=0
-                          AND (received_at_unit_date=? OR (received_at_unit_date IS NULL AND ? IS NULL))
-                        LIMIT 1
-                    """, (self._active_wh_id, item_id, ql, ngay_nhap, ngay_nhap)).fetchone()
-
-                    if existing:
-                        conn.execute(
-                            "UPDATE inventory SET quantity=quantity+?, notes=? WHERE id=?",
-                            (so_luong, ghi_chu, existing["id"]),
-                        )
-                        updated += 1
-                    else:
-                        conn.execute(
-                            "INSERT INTO inventory"
-                            " (warehouse_id, item_type_id, quality_level, quantity, received_at_unit_date, notes)"
-                            " VALUES (?, ?, ?, ?, ?, ?)",
-                            (self._active_wh_id, item_id, ql, so_luong, ngay_nhap, ghi_chu),
-                        )
-                        inserted += 1
-                except Exception as row_err:
-                    errors.append(f"Dòng {i}: {row_err}")
+                ten_hang = str(row[i_ten]).strip()
+                if not ten_hang:
+                    continue
+                if ten_hang not in item_map:
+                    errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
                     skipped += 1
+                    continue
+
+                ngay_raw = row[i_ngay] if i_ngay is not None and len(row) > i_ngay else None
+                ngay_nhap = str(ngay_raw).strip() if ngay_raw else today
+
+                item_id = item_map[ten_hang]
+                for ql, idx in [("H1", i_h1), ("H2", i_h2), ("H3", i_h3), ("H4", i_h4)]:
+                    sl = _qty(row, idx)
+                    if sl <= 0:
+                        continue
+                    try:
+                        existing = conn.execute("""
+                            SELECT id FROM inventory
+                            WHERE warehouse_id=? AND item_type_id=?
+                              AND quality_level=? AND is_shared=0
+                            LIMIT 1
+                        """, (self._active_wh_id, item_id, ql)).fetchone()
+                        if existing:
+                            conn.execute(
+                                "UPDATE inventory SET quantity=?, received_at_unit_date=? WHERE id=?",
+                                (sl, ngay_nhap, existing["id"]),
+                            )
+                            updated += 1
+                        else:
+                            conn.execute(
+                                "INSERT INTO inventory"
+                                " (warehouse_id, item_type_id, quality_level, quantity, received_at_unit_date)"
+                                " VALUES (?, ?, ?, ?, ?)",
+                                (self._active_wh_id, item_id, ql, sl, ngay_nhap),
+                            )
+                            inserted += 1
+                    except Exception as row_err:
+                        errors.append(f"Dòng {i} {ql}: {row_err}")
+                        skipped += 1
 
             conn.commit()
             msg = f"Thêm mới: {inserted}   Cộng dồn: {updated}   Bỏ qua: {skipped}"
