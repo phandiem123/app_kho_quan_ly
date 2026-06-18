@@ -71,6 +71,18 @@ def _auto_width_xlsx(ws):
         ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
 
 
+def _find_col(header: list[str], *keywords) -> int | None:
+    """Return first column index whose header contains any of the keywords (case-insensitive, NFC)."""
+    import unicodedata
+    def _n(s): return unicodedata.normalize("NFC", str(s or "").strip().lower())
+    norm_kws = [_n(k) for k in keywords]
+    for i, h in enumerate(header):
+        nh = _n(h)
+        if any(kw in nh for kw in norm_kws):
+            return i
+    return None
+
+
 class _SmartHeader(QHeaderView):
     """Header với sort arrows, eye-icon ẩn/hiện, và drag reorder."""
     sortRequested = pyqtSignal(int, bool)   # (logical_col, ascending)
@@ -1702,20 +1714,18 @@ class ThongKeKhoPage(QWidget):
 
         export_h = QHBoxLayout()
         export_h.addStretch()
-        self._import_btn = QPushButton("Nhập Excel")
-        self._import_btn.setFixedHeight(34)
-        self._import_btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-        self._import_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._import_btn.setStyleSheet(_EXPORT_BTN_STYLE)
-        self._import_btn.clicked.connect(self._import_excel)
-        export_h.addWidget(self._import_btn)
-        self._export_btn = QPushButton("Xuất Excel")
-        self._export_btn.setFixedHeight(34)
-        self._export_btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-        self._export_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._export_btn.setStyleSheet(_EXPORT_BTN_STYLE)
-        self._export_btn.clicked.connect(self._export_excel)
-        export_h.addWidget(self._export_btn)
+        for label, slot in [
+            ("Tải Mẫu",    self._download_template),
+            ("Nhập Excel", self._import_excel),
+            ("Xuất Excel", self._export_excel),
+        ]:
+            btn = QPushButton(label)
+            btn.setFixedHeight(34)
+            btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn.setStyleSheet(_EXPORT_BTN_STYLE)
+            btn.clicked.connect(slot)
+            export_h.addWidget(btn)
         root.addLayout(export_h)
         root.addSpacing(16)
 
@@ -2129,6 +2139,29 @@ class ThongKeKhoPage(QWidget):
             return rows
         return sorted(rows, key=fn, reverse=not asc)
 
+    def _download_template(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu File Mẫu", "mau_ton_kho_kho.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Tồn Kho"
+            _write_xlsx_header(ws, ["Tên Hàng *", "Mức HH * (H1/H2/H3/H4)", "Số Lượng *", "Ghi Chú"])
+            ws.append(["Súng AK47", "H1", 50, ""])
+            ws.append(["Súng AK47", "H2", 10, "Lô cũ"])
+            _auto_width_xlsx(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
     def _import_excel(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
         if not _check_openpyxl(self):
@@ -2143,7 +2176,15 @@ class ThongKeKhoPage(QWidget):
             import openpyxl
             wb = openpyxl.load_workbook(path)
             ws = wb.active
-            rows = list(ws.iter_rows(min_row=2, values_only=True))
+            all_rows = list(ws.iter_rows(min_row=1, values_only=True))
+            if not all_rows:
+                return
+
+            hdr = [str(c or "").strip() for c in all_rows[0]]
+            i_ten = _find_col(hdr, "tên hàng", "ten hang") or 0
+            i_ql  = _find_col(hdr, "mức hh", "muc hh", "chất lượng") or 1
+            i_sl  = _find_col(hdr, "số lượng", "so luong") or 2
+            i_ghu = _find_col(hdr, "ghi chú", "ghi chu")
 
             conn = database.get_conn()
             item_map = {r["name"]: r["id"] for r in conn.execute(
@@ -2153,14 +2194,15 @@ class ThongKeKhoPage(QWidget):
             inserted = updated = skipped = 0
             errors = []
 
-            for i, row in enumerate(rows, start=2):
-                if not row or not row[0]:
+            for i, row in enumerate(all_rows[1:], start=2):
+                if not row or not row[i_ten]:
                     continue
                 try:
-                    ten_hang = str(row[0]).strip() if row[0] else ""
-                    ql       = str(row[1]).strip().upper() if len(row) > 1 and row[1] else ""
-                    so_luong = int(row[2]) if len(row) > 2 and row[2] is not None else 0
-                    ghi_chu  = str(row[3]).strip() if len(row) > 3 and row[3] else ""
+                    ten_hang = str(row[i_ten]).strip() if row[i_ten] else ""
+                    ql       = str(row[i_ql]).strip().upper() if len(row) > i_ql and row[i_ql] else ""
+                    sl_raw   = row[i_sl] if len(row) > i_sl else None
+                    so_luong = int(sl_raw) if sl_raw is not None else 0
+                    ghi_chu  = str(row[i_ghu]).strip() if i_ghu is not None and len(row) > i_ghu and row[i_ghu] else ""
 
                     if not ten_hang or ql not in VALID_QL or so_luong <= 0:
                         errors.append(f"Dòng {i}: thiếu hoặc sai dữ liệu (cần Tên Hàng, Mức HH H1-H4, Số Lượng > 0)")
@@ -2405,22 +2447,23 @@ class ThongKeDonViPage(QWidget):
         self._local_search.textChanged.connect(self._apply_local_filter)
         card_h.addWidget(self._local_search)
 
-        self._import_btn2 = QPushButton("Nhập Excel")
-        self._import_btn2.setFixedHeight(34)
-        self._import_btn2.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-        self._import_btn2.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._import_btn2.setStyleSheet(_EXPORT_BTN_STYLE)
-        self._import_btn2.clicked.connect(self._import_excel)
-        card_h.addWidget(self._import_btn2)
-        self._export_btn = QPushButton("Xuất Excel")
-        self._export_btn.setFixedHeight(34)
-        self._export_btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-        self._export_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._export_btn.setStyleSheet(_EXPORT_BTN_STYLE)
-        self._export_btn.clicked.connect(self._export_excel)
-        card_h.addWidget(self._export_btn)
-
         root.addLayout(card_h)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        for label, slot in [
+            ("Tải Mẫu",    self._download_template),
+            ("Nhập Excel", self._import_excel),
+            ("Xuất Excel", self._export_excel),
+        ]:
+            btn = QPushButton(label)
+            btn.setFixedHeight(34)
+            btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn.setStyleSheet(_EXPORT_BTN_STYLE)
+            btn.clicked.connect(slot)
+            btn_row.addWidget(btn)
+        root.addLayout(btn_row)
         root.addSpacing(16)
 
         # ── Table ─────────────────────────────────────────────────────────────
@@ -2832,6 +2875,35 @@ class ThongKeDonViPage(QWidget):
             return rows
         return sorted(rows, key=fn, reverse=not asc)
 
+    def _download_template(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu File Mẫu", "mau_ton_kho_don_vi.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Tồn Kho Đơn Vị"
+            _write_xlsx_header(ws, [
+                "Tên Hàng *",
+                "Mức HH * (H1/H2/H3/H4)",
+                "Số Lượng *",
+                "Ngày Nhập ĐV (yyyy-mm-dd)",
+                "Ghi Chú",
+            ])
+            ws.append(["Súng AK47", "H1", 20, "2024-01-15", ""])
+            ws.append(["Súng AK47", "H2", 5, "2023-06-01", "Lô cũ"])
+            _auto_width_xlsx(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Đã lưu", f"File mẫu:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
     def _import_excel(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
         if not _check_openpyxl(self):
@@ -2846,7 +2918,16 @@ class ThongKeDonViPage(QWidget):
             import openpyxl
             wb = openpyxl.load_workbook(path)
             ws = wb.active
-            rows = list(ws.iter_rows(min_row=2, values_only=True))
+            all_rows = list(ws.iter_rows(min_row=1, values_only=True))
+            if not all_rows:
+                return
+
+            hdr = [str(c or "").strip() for c in all_rows[0]]
+            i_ten  = _find_col(hdr, "tên hàng", "ten hang") or 0
+            i_ql   = _find_col(hdr, "mức hh", "muc hh", "chất lượng") or 1
+            i_sl   = _find_col(hdr, "số lượng", "so luong") or 2
+            i_ngay = _find_col(hdr, "ngày nhập", "ngay nhap")
+            i_ghu  = _find_col(hdr, "ghi chú", "ghi chu")
 
             conn = database.get_conn()
             item_map = {r["name"]: r["id"] for r in conn.execute(
@@ -2856,15 +2937,16 @@ class ThongKeDonViPage(QWidget):
             inserted = updated = skipped = 0
             errors = []
 
-            for i, row in enumerate(rows, start=2):
-                if not row or not row[0]:
+            for i, row in enumerate(all_rows[1:], start=2):
+                if not row or not row[i_ten]:
                     continue
                 try:
-                    ten_hang    = str(row[0]).strip() if row[0] else ""
-                    ql          = str(row[1]).strip().upper() if len(row) > 1 and row[1] else ""
-                    so_luong    = int(row[2]) if len(row) > 2 and row[2] is not None else 0
-                    ngay_nhap   = str(row[3]).strip() if len(row) > 3 and row[3] else None
-                    ghi_chu     = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+                    ten_hang  = str(row[i_ten]).strip() if row[i_ten] else ""
+                    ql        = str(row[i_ql]).strip().upper() if len(row) > i_ql and row[i_ql] else ""
+                    sl_raw    = row[i_sl] if len(row) > i_sl else None
+                    so_luong  = int(sl_raw) if sl_raw is not None else 0
+                    ngay_nhap = str(row[i_ngay]).strip() if i_ngay is not None and len(row) > i_ngay and row[i_ngay] else None
+                    ghi_chu   = str(row[i_ghu]).strip() if i_ghu is not None and len(row) > i_ghu and row[i_ghu] else ""
 
                     if not ten_hang or ql not in VALID_QL or so_luong <= 0:
                         errors.append(f"Dòng {i}: thiếu hoặc sai dữ liệu (cần Tên Hàng, Mức HH H1-H4, Số Lượng > 0)")
