@@ -170,7 +170,7 @@ class KhoTable(QTableWidget):
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.setColumnWidth(0, 56)
+        self.setColumnWidth(0, 72)
         self.setColumnWidth(2, 100)
         self.setColumnWidth(5, 52)
 
@@ -220,7 +220,7 @@ class HangHoaTable(QTableWidget):
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self.setColumnWidth(0, 56)
+        self.setColumnWidth(0, 72)
         self.setColumnWidth(2, 120)
         self.setColumnWidth(3, 130)
         self.setColumnWidth(4, 120)

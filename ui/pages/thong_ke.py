@@ -1702,6 +1702,13 @@ class ThongKeKhoPage(QWidget):
 
         export_h = QHBoxLayout()
         export_h.addStretch()
+        self._import_btn = QPushButton("Nhập Excel")
+        self._import_btn.setFixedHeight(34)
+        self._import_btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        self._import_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._import_btn.setStyleSheet(_EXPORT_BTN_STYLE)
+        self._import_btn.clicked.connect(self._import_excel)
+        export_h.addWidget(self._import_btn)
         self._export_btn = QPushButton("Xuất Excel")
         self._export_btn.setFixedHeight(34)
         self._export_btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
@@ -2122,6 +2129,83 @@ class ThongKeKhoPage(QWidget):
             return rows
         return sorted(rows, key=fn, reverse=not asc)
 
+    def _import_excel(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self):
+            return
+        if self._active_wh_id is None:
+            QMessageBox.information(self, "Nhập Excel", "Vui lòng chọn kho trước.")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Chọn File Excel", "", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path)
+            ws = wb.active
+            rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+            conn = database.get_conn()
+            item_map = {r["name"]: r["id"] for r in conn.execute(
+                "SELECT id, name FROM item_types WHERE is_active=1"
+            ).fetchall()}
+            VALID_QL = {"H1", "H2", "H3", "H4"}
+            inserted = updated = skipped = 0
+            errors = []
+
+            for i, row in enumerate(rows, start=2):
+                if not row or not row[0]:
+                    continue
+                try:
+                    ten_hang = str(row[0]).strip() if row[0] else ""
+                    ql       = str(row[1]).strip().upper() if len(row) > 1 and row[1] else ""
+                    so_luong = int(row[2]) if len(row) > 2 and row[2] is not None else 0
+                    ghi_chu  = str(row[3]).strip() if len(row) > 3 and row[3] else ""
+
+                    if not ten_hang or ql not in VALID_QL or so_luong <= 0:
+                        errors.append(f"Dòng {i}: thiếu hoặc sai dữ liệu (cần Tên Hàng, Mức HH H1-H4, Số Lượng > 0)")
+                        skipped += 1
+                        continue
+                    if ten_hang not in item_map:
+                        errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
+                        skipped += 1
+                        continue
+
+                    item_id = item_map[ten_hang]
+                    existing = conn.execute("""
+                        SELECT id FROM inventory
+                        WHERE warehouse_id=? AND item_type_id=?
+                          AND quality_level=? AND is_shared=0
+                          AND received_at_unit_date IS NULL
+                        LIMIT 1
+                    """, (self._active_wh_id, item_id, ql)).fetchone()
+
+                    if existing:
+                        conn.execute(
+                            "UPDATE inventory SET quantity=quantity+?, notes=? WHERE id=?",
+                            (so_luong, ghi_chu, existing["id"]),
+                        )
+                        updated += 1
+                    else:
+                        conn.execute(
+                            "INSERT INTO inventory (warehouse_id, item_type_id, quality_level, quantity, notes)"
+                            " VALUES (?, ?, ?, ?, ?)",
+                            (self._active_wh_id, item_id, ql, so_luong, ghi_chu),
+                        )
+                        inserted += 1
+                except Exception as row_err:
+                    errors.append(f"Dòng {i}: {row_err}")
+                    skipped += 1
+
+            conn.commit()
+            msg = f"Thêm mới: {inserted}   Cộng dồn: {updated}   Bỏ qua: {skipped}"
+            if errors:
+                msg += "\n\nChi tiết lỗi:\n" + "\n".join(errors[:10])
+            QMessageBox.information(self, "Nhập hoàn tất", msg)
+            self.refresh()
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
     def _export_excel(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
         if not _check_openpyxl(self):
@@ -2321,6 +2405,13 @@ class ThongKeDonViPage(QWidget):
         self._local_search.textChanged.connect(self._apply_local_filter)
         card_h.addWidget(self._local_search)
 
+        self._import_btn2 = QPushButton("Nhập Excel")
+        self._import_btn2.setFixedHeight(34)
+        self._import_btn2.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        self._import_btn2.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._import_btn2.setStyleSheet(_EXPORT_BTN_STYLE)
+        self._import_btn2.clicked.connect(self._import_excel)
+        card_h.addWidget(self._import_btn2)
         self._export_btn = QPushButton("Xuất Excel")
         self._export_btn.setFixedHeight(34)
         self._export_btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
@@ -2740,6 +2831,85 @@ class ThongKeDonViPage(QWidget):
         if fn is None:
             return rows
         return sorted(rows, key=fn, reverse=not asc)
+
+    def _import_excel(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self):
+            return
+        if self._active_wh_id is None:
+            QMessageBox.information(self, "Nhập Excel", "Vui lòng chọn đơn vị trước.")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Chọn File Excel", "", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path)
+            ws = wb.active
+            rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+            conn = database.get_conn()
+            item_map = {r["name"]: r["id"] for r in conn.execute(
+                "SELECT id, name FROM item_types WHERE is_active=1"
+            ).fetchall()}
+            VALID_QL = {"H1", "H2", "H3", "H4"}
+            inserted = updated = skipped = 0
+            errors = []
+
+            for i, row in enumerate(rows, start=2):
+                if not row or not row[0]:
+                    continue
+                try:
+                    ten_hang    = str(row[0]).strip() if row[0] else ""
+                    ql          = str(row[1]).strip().upper() if len(row) > 1 and row[1] else ""
+                    so_luong    = int(row[2]) if len(row) > 2 and row[2] is not None else 0
+                    ngay_nhap   = str(row[3]).strip() if len(row) > 3 and row[3] else None
+                    ghi_chu     = str(row[4]).strip() if len(row) > 4 and row[4] else ""
+
+                    if not ten_hang or ql not in VALID_QL or so_luong <= 0:
+                        errors.append(f"Dòng {i}: thiếu hoặc sai dữ liệu (cần Tên Hàng, Mức HH H1-H4, Số Lượng > 0)")
+                        skipped += 1
+                        continue
+                    if ten_hang not in item_map:
+                        errors.append(f"Dòng {i}: không tìm thấy mặt hàng '{ten_hang}'")
+                        skipped += 1
+                        continue
+
+                    item_id = item_map[ten_hang]
+                    existing = conn.execute("""
+                        SELECT id FROM inventory
+                        WHERE warehouse_id=? AND item_type_id=?
+                          AND quality_level=? AND is_shared=0
+                          AND (received_at_unit_date=? OR (received_at_unit_date IS NULL AND ? IS NULL))
+                        LIMIT 1
+                    """, (self._active_wh_id, item_id, ql, ngay_nhap, ngay_nhap)).fetchone()
+
+                    if existing:
+                        conn.execute(
+                            "UPDATE inventory SET quantity=quantity+?, notes=? WHERE id=?",
+                            (so_luong, ghi_chu, existing["id"]),
+                        )
+                        updated += 1
+                    else:
+                        conn.execute(
+                            "INSERT INTO inventory"
+                            " (warehouse_id, item_type_id, quality_level, quantity, received_at_unit_date, notes)"
+                            " VALUES (?, ?, ?, ?, ?, ?)",
+                            (self._active_wh_id, item_id, ql, so_luong, ngay_nhap, ghi_chu),
+                        )
+                        inserted += 1
+                except Exception as row_err:
+                    errors.append(f"Dòng {i}: {row_err}")
+                    skipped += 1
+
+            conn.commit()
+            msg = f"Thêm mới: {inserted}   Cộng dồn: {updated}   Bỏ qua: {skipped}"
+            if errors:
+                msg += "\n\nChi tiết lỗi:\n" + "\n".join(errors[:10])
+            QMessageBox.information(self, "Nhập hoàn tất", msg)
+            self.refresh()
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
 
     def _export_excel(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
