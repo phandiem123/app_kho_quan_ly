@@ -90,6 +90,13 @@ def _az_key(name: str) -> str:
     return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
 
+def _norm_name(s) -> str:
+    """Chuẩn hoá tên để so khớp: NFC, strip, thu gọn dấu cách thừa."""
+    import unicodedata, re
+    s = unicodedata.normalize("NFC", str(s or "").strip())
+    return re.sub(r'\s+', ' ', s)
+
+
 class _SmartHeader(QHeaderView):
     """Header với sort arrows, eye-icon ẩn/hiện, và drag reorder."""
     sortRequested = pyqtSignal(int, bool)   # (logical_col, ascending)
@@ -2211,7 +2218,7 @@ class ThongKeKhoPage(QWidget):
             if i_h4 is None: i_h4 = 8
 
             conn = database.get_conn()
-            item_map = {r["name"]: r["id"] for r in conn.execute(
+            item_map = {_norm_name(r["name"]): r["id"] for r in conn.execute(
                 "SELECT id, name FROM item_types WHERE is_active=1"
             ).fetchall()}
             inserted = updated = skipped = 0
@@ -2229,7 +2236,7 @@ class ThongKeKhoPage(QWidget):
             for i, row in enumerate(all_rows[1:], start=2):
                 if not row or not row[i_ten]:
                     continue
-                ten_hang = str(row[i_ten]).strip()
+                ten_hang = _norm_name(row[i_ten])
                 if not ten_hang:
                     continue
                 if ten_hang not in item_map:
@@ -2965,7 +2972,7 @@ class ThongKeDonViPage(QWidget):
             if i_h4 is None: i_h4 = 6
 
             conn = database.get_conn()
-            item_map = {r["name"]: r["id"] for r in conn.execute(
+            item_map = {_norm_name(r["name"]): r["id"] for r in conn.execute(
                 "SELECT id, name FROM item_types WHERE is_active=1"
             ).fetchall()}
             inserted = updated = skipped = 0
@@ -2985,7 +2992,7 @@ class ThongKeDonViPage(QWidget):
             for i, row in enumerate(all_rows[1:], start=2):
                 if not row or not row[i_ten]:
                     continue
-                ten_hang = str(row[i_ten]).strip()
+                ten_hang = _norm_name(row[i_ten])
                 if not ten_hang:
                     continue
                 if ten_hang not in item_map:

@@ -149,7 +149,7 @@ class DotsButton(QPushButton):
 
 # ── Bảng Kho / Đơn Vị ────────────────────────────────────────────────────────
 class KhoTable(QTableWidget):
-    COLS = ["STT", "Tên Kho", "Loại", "Địa Chỉ", "Ghi Chú", ""]
+    COLS = ["", "STT", "Tên Kho", "Loại", "Địa Chỉ", "Ghi Chú", ""]
 
     def __init__(self):
         super().__init__(0, len(self.COLS))
@@ -157,48 +157,65 @@ class KhoTable(QTableWidget):
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setStyleSheet(_TABLE_STYLE)
         h = self.horizontalHeader()
+        h.setSectionsClickable(True)
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.setColumnWidth(0, 72)
-        self.setColumnWidth(2, 100)
-        self.setColumnWidth(5, 52)
+        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(0, 36)
+        self.setColumnWidth(1, 72)
+        self.setColumnWidth(3, 100)
+        self.setColumnWidth(6, 52)
 
     def set_type_col_visible(self, visible: bool):
-        self.setColumnHidden(2, not visible)
+        self.setColumnHidden(3, not visible)
+
+    def get_checked_ids(self) -> list:
+        ids = []
+        for r in range(self.rowCount()):
+            it = self.item(r, 0)
+            if it and it.checkState() == Qt.CheckState.Checked:
+                ids.append(it.data(Qt.ItemDataRole.UserRole))
+        return ids
 
     def load(self, warehouses: list[Warehouse], on_edit=None, on_delete=None):
+        self.blockSignals(True)
         self.setRowCount(0)
         for i, wh in enumerate(warehouses):
             r = self.rowCount()
             self.insertRow(r)
             self.setRowHeight(r, 52)
+            cb = QTableWidgetItem()
+            cb.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            cb.setCheckState(Qt.CheckState.Unchecked)
+            cb.setData(Qt.ItemDataRole.UserRole, wh.id)
+            self.setItem(r, 0, cb)
             cells = [str(i + 1), wh.name,
                      _TYPE_LABEL.get(wh.type, wh.type), wh.address or "", wh.notes or ""]
-            for col, val in enumerate(cells):
+            for col, val in enumerate(cells, start=1):
                 item = QTableWidgetItem(val)
                 item.setFont(QFont(FONT, 12))
-                if col == 0:
+                if col == 1:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.setItem(r, col, item)
             if on_edit or on_delete:
                 btn = DotsButton(wh, None, on_edit, on_delete)
-                self.setCellWidget(r, 5, btn)
+                self.setCellWidget(r, 6, btn)
+        self.blockSignals(False)
 
 
 # ── Bảng Hàng Hoá ─────────────────────────────────────────────────────────────
 class HangHoaTable(QTableWidget):
-    COLS = ["STT", "Tên Hàng", "Đơn Vị Tính", "Niên Hạn (năm)", "Đơn Giá", "Ghi Chú", ""]
+    COLS = ["", "STT", "Tên Hàng", "Đơn Vị Tính", "Niên Hạn (năm)", "Đơn Giá", "Ghi Chú", ""]
 
     def __init__(self):
         super().__init__(0, len(self.COLS))
@@ -206,46 +223,63 @@ class HangHoaTable(QTableWidget):
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setStyleSheet(_TABLE_STYLE)
         h = self.horizontalHeader()
+        h.setSectionsClickable(True)
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self.setColumnWidth(0, 72)
-        self.setColumnWidth(2, 120)
-        self.setColumnWidth(3, 130)
-        self.setColumnWidth(4, 120)
-        self.setColumnWidth(6, 52)
+        h.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(0, 36)
+        self.setColumnWidth(1, 72)
+        self.setColumnWidth(3, 120)
+        self.setColumnWidth(4, 130)
+        self.setColumnWidth(5, 120)
+        self.setColumnWidth(7, 52)
+
+    def get_checked_ids(self) -> list:
+        ids = []
+        for r in range(self.rowCount()):
+            it = self.item(r, 0)
+            if it and it.checkState() == Qt.CheckState.Checked:
+                ids.append(it.data(Qt.ItemDataRole.UserRole))
+        return ids
 
     def load(self, items: list[ItemType], on_edit=None, on_delete=None):
+        self.blockSignals(True)
         self.setRowCount(0)
         for i, it in enumerate(items):
             r = self.rowCount()
             self.insertRow(r)
             self.setRowHeight(r, 52)
+            cb = QTableWidgetItem()
+            cb.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            cb.setCheckState(Qt.CheckState.Unchecked)
+            cb.setData(Qt.ItemDataRole.UserRole, it.id)
+            self.setItem(r, 0, cb)
             months = it.total_lifespan_months
             years_str = f"{months // 12}" if months % 12 == 0 else f"{months / 12:.1f}"
             price_str = f"{it.unit_price:,.0f}" if it.unit_price else "—"
             cells = [str(i + 1), it.name,
                      it.unit_of_measure, years_str, price_str, it.notes or ""]
-            for col, val in enumerate(cells):
+            for col, val in enumerate(cells, start=1):
                 cell = QTableWidgetItem(val)
                 cell.setFont(QFont(FONT, 12))
-                if col in (0, 3, 4):
+                if col in (1, 4, 5):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.setItem(r, col, cell)
             if on_edit or on_delete:
                 btn = DotsButton(it, None, on_edit, on_delete)
-                self.setCellWidget(r, 6, btn)
+                self.setCellWidget(r, 7, btn)
+        self.blockSignals(False)
 
 
 # ── Helper: info section frame ─────────────────────────────────────────────────
@@ -367,6 +401,21 @@ class TrangChuPage(QWidget):
         title_row.addWidget(self._section_title)
         title_row.addStretch()
 
+        self._btn_delete_sel = QPushButton("Xóa đã chọn")
+        self._btn_delete_sel.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        self._btn_delete_sel.setFixedHeight(36)
+        self._btn_delete_sel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._btn_delete_sel.setStyleSheet("""
+            QPushButton {
+                background: #d32f2f; color: white; border: none;
+                border-radius: 8px; padding: 0 16px;
+            }
+            QPushButton:hover { background: #b71c1c; }
+        """)
+        self._btn_delete_sel.setVisible(False)
+        self._btn_delete_sel.clicked.connect(self._on_delete_selected)
+        title_row.addWidget(self._btn_delete_sel)
+
         self._btn_add = QPushButton("+ Thêm Kho")
         self._btn_add.setFont(QFont(FONT, 12, QFont.Weight.Bold))
         self._btn_add.setFixedHeight(36)
@@ -389,6 +438,20 @@ class TrangChuPage(QWidget):
         self.item_table = HangHoaTable()
         self.item_table.setVisible(False)
         cv.addWidget(self.item_table)
+
+        # Kết nối checkbox signals
+        self.table.itemChanged.connect(
+            lambda item: self._update_sel_count() if item.column() == 0 else None
+        )
+        self.item_table.itemChanged.connect(
+            lambda item: self._update_sel_count() if item.column() == 0 else None
+        )
+        self.table.horizontalHeader().sectionClicked.connect(
+            lambda col: self._toggle_all() if col == 0 else None
+        )
+        self.item_table.horizontalHeader().sectionClicked.connect(
+            lambda col: self._toggle_all() if col == 0 else None
+        )
 
         self._crud_panel.setVisible(False)
         root.addWidget(self._crud_panel)
@@ -536,6 +599,7 @@ class TrangChuPage(QWidget):
             self.item_table.load(data, on_edit=self._edit_item, on_delete=self._delete_item)
             self.item_table.setVisible(True)
             self.table.setVisible(False)
+        self._update_sel_count()
 
     def _on_search(self, _: str):
         self._apply_filter()
@@ -642,3 +706,66 @@ class TrangChuPage(QWidget):
             f"<b>Niên hạn tổng:</b> {it.total_lifespan_months} tháng<br>"
             f"<b>Ghi chú:</b> {it.notes or '—'}",
         )
+
+    # ── Multi-select ─────────────────────────────────────────────────────────
+
+    def _active_table(self) -> "KhoTable | HangHoaTable":
+        return self.item_table if self._active_type == "HANG_HOA" else self.table
+
+    def _update_sel_count(self):
+        tbl = self._active_table()
+        ids = tbl.get_checked_ids()
+        n = len(ids)
+        total = tbl.rowCount()
+        # Update header checkbox label
+        hdr_item = tbl.horizontalHeaderItem(0)
+        if hdr_item:
+            hdr_item.setText("☑" if n > 0 and n == total else "☐")
+        # Update delete button
+        if n:
+            self._btn_delete_sel.setText(f"Xóa đã chọn ({n})")
+            self._btn_delete_sel.setVisible(True)
+        else:
+            self._btn_delete_sel.setVisible(False)
+
+    def _toggle_all(self):
+        tbl = self._active_table()
+        if tbl.rowCount() == 0:
+            return
+        all_checked = len(tbl.get_checked_ids()) == tbl.rowCount()
+        new_state = Qt.CheckState.Unchecked if all_checked else Qt.CheckState.Checked
+        tbl.blockSignals(True)
+        for r in range(tbl.rowCount()):
+            cb = tbl.item(r, 0)
+            if cb:
+                cb.setCheckState(new_state)
+        tbl.blockSignals(False)
+        self._update_sel_count()
+
+    def _on_delete_selected(self):
+        tbl = self._active_table()
+        ids = tbl.get_checked_ids()
+        if not ids:
+            return
+        n = len(ids)
+        if self._active_type == "HANG_HOA":
+            label = "hàng hoá"
+        elif self._active_type == "DON_VI":
+            label = "đơn vị"
+        else:
+            label = "kho"
+        reply = QMessageBox.question(
+            self, "Xác nhận xóa",
+            f"Bạn có chắc muốn xóa <b>{n} {label}</b> đã chọn?<br>"
+            "Dữ liệu lịch sử vẫn được giữ lại.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            if self._active_type == "HANG_HOA":
+                for eid in ids:
+                    item_soft_delete(eid)
+            else:
+                for eid in ids:
+                    wh_soft_delete(eid)
+            self.refresh()
