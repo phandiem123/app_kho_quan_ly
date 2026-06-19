@@ -1606,24 +1606,12 @@ class ThongKeSharedPage(QWidget):
 class ThongKeKhoPage(QWidget):
     """Tồn kho theo từng kho/đơn vị — mỗi kho là một tab riêng."""
 
-    _COLS = ["STT", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
+    _COLS = ["", "STT", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
              "H1", "H2", "H3", "H4", "Tổng"]
-    _COLS_SEARCH = ["STT", "Kho", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
+    _COLS_SEARCH = ["", "STT", "Kho", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)", "Đơn Giá",
                     "H1", "H2", "H3", "H4", "Tổng"]
 
     _SORT_KEYS_NORMAL: dict = {
-        1: lambda r: (r["item_name"] or "").lower(),
-        2: lambda r: (r["unit_of_measure"] or "").lower(),
-        3: lambda r: r["total_lifespan_months"] or 0,
-        4: lambda r: r["don_gia"] or 0,
-        5: lambda r: r["h1"],
-        6: lambda r: r["h2"],
-        7: lambda r: r["h3"],
-        8: lambda r: r["h4"],
-        9: lambda r: r["total"],
-    }
-    _SORT_KEYS_SEARCH: dict = {
-        1: lambda r: (r["wh_name"] or "").lower(),
         2: lambda r: (r["item_name"] or "").lower(),
         3: lambda r: (r["unit_of_measure"] or "").lower(),
         4: lambda r: r["total_lifespan_months"] or 0,
@@ -1633,6 +1621,18 @@ class ThongKeKhoPage(QWidget):
         8: lambda r: r["h3"],
         9: lambda r: r["h4"],
         10: lambda r: r["total"],
+    }
+    _SORT_KEYS_SEARCH: dict = {
+        2: lambda r: (r["wh_name"] or "").lower(),
+        3: lambda r: (r["item_name"] or "").lower(),
+        4: lambda r: (r["unit_of_measure"] or "").lower(),
+        5: lambda r: r["total_lifespan_months"] or 0,
+        6: lambda r: r["don_gia"] or 0,
+        7: lambda r: r["h1"],
+        8: lambda r: r["h2"],
+        9: lambda r: r["h3"],
+        10: lambda r: r["h4"],
+        11: lambda r: r["total"],
     }
 
     def __init__(self):
@@ -1727,6 +1727,18 @@ class ThongKeKhoPage(QWidget):
         root.addSpacing(10)
 
         export_h = QHBoxLayout()
+        self._btn_del_sel = QPushButton("Xoá đã chọn (0)")
+        self._btn_del_sel.setFixedHeight(34)
+        self._btn_del_sel.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        self._btn_del_sel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._btn_del_sel.setStyleSheet(
+            "QPushButton { background: #d32f2f; color: white; border-radius: 8px;"
+            " padding: 0 16px; border: none; }"
+            " QPushButton:hover { background: #b71c1c; }"
+        )
+        self._btn_del_sel.clicked.connect(self._on_delete_selected)
+        self._btn_del_sel.setVisible(False)
+        export_h.addWidget(self._btn_del_sel)
         export_h.addStretch()
         for label, slot in [
             ("Tải Mẫu",    self._download_template),
@@ -1751,7 +1763,7 @@ class ThongKeKhoPage(QWidget):
         tbl_v = QVBoxLayout(tbl_card)
         tbl_v.setContentsMargins(0, 0, 0, 0)
 
-        self._smart_hdr = _SmartHeader({0})
+        self._smart_hdr = _SmartHeader({0, 1})
         self._table = QTableWidget(0, len(self._COLS))
         self._table.setHorizontalHeader(self._smart_hdr)
         self._table.setHorizontalHeaderLabels(self._COLS)
@@ -1759,7 +1771,7 @@ class ThongKeKhoPage(QWidget):
         self._table.setShowGrid(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1767,6 +1779,13 @@ class ThongKeKhoPage(QWidget):
         self._table.cellDoubleClicked.connect(self._on_cell_dblclick)
         self._smart_hdr.sortRequested.connect(self._on_sort)
         self._smart_hdr.visToggled.connect(self._vis_btn.on_vis_toggled)
+        self._table.itemChanged.connect(
+            lambda item: self._update_sel_count() if item.column() == 0 else None
+        )
+        self._smart_hdr.setSectionsClickable(True)
+        self._smart_hdr.sectionClicked.connect(
+            lambda col: self._toggle_all() if col == 0 else None
+        )
 
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
@@ -1822,6 +1841,7 @@ class ThongKeKhoPage(QWidget):
         h = self._table.horizontalHeader()
         specs = (
             [
+                (QHeaderView.ResizeMode.Fixed, 36),
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Fixed, 100),
                 (QHeaderView.ResizeMode.Stretch, None),
@@ -1834,6 +1854,7 @@ class ThongKeKhoPage(QWidget):
                 (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Fixed, 80),
             ] if search_mode else [
+                (QHeaderView.ResizeMode.Fixed, 36),
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
@@ -1850,7 +1871,7 @@ class ThongKeKhoPage(QWidget):
             h.setSectionResizeMode(i, mode)
             if w:
                 self._table.setColumnWidth(i, w)
-        skip = {0}
+        skip = {0, 1}
         self._smart_hdr.set_skip(skip)
         self._vis_btn.bind(self._table, self._smart_hdr, cols, skip)
         if search_mode:
@@ -2050,11 +2071,22 @@ class ThongKeKhoPage(QWidget):
 
     def _load_table(self, rows, search_mode: bool = False):
         rows = self._sort_rows(rows, search_mode)
+        self._table.blockSignals(True)
         self._table.setRowCount(0)
         for i, r in enumerate(rows):
             ri = self._table.rowCount()
             self._table.insertRow(ri)
             self._table.setRowHeight(ri, 48)
+
+            # Checkbox col 0
+            chk = QTableWidgetItem()
+            chk.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            chk.setCheckState(Qt.CheckState.Unchecked)
+            chk.setData(Qt.ItemDataRole.UserRole, r["item_type_id"])
+            self._table.setItem(ri, 0, chk)
 
             mm = r["total_lifespan_months"]
             nien_han = f"{mm // 12} năm" if mm else "—"
@@ -2122,7 +2154,7 @@ class ThongKeKhoPage(QWidget):
                     (str(r["total"]),      True,  False, None),
                 ]
 
-            for c, (val, center, red, tip) in enumerate(cells):
+            for c, (val, center, red, tip) in enumerate(cells, start=1):
                 cell = QTableWidgetItem(val)
                 cell.setFont(QFont(FONT, 12))
                 if center:
@@ -2135,12 +2167,15 @@ class ThongKeKhoPage(QWidget):
 
             # Store edit key on H1-H4 cells so double-click knows what to update
             wh_id = r["wh_id"] if search_mode else self._active_wh_id
-            h_start = 6 if search_mode else 5
+            h_start = 7 if search_mode else 6
             for qi, ql in enumerate(("H1", "H2", "H3", "H4")):
                 item = self._table.item(ri, h_start + qi)
                 if item:
                     item.setData(Qt.ItemDataRole.UserRole,
                                  (wh_id, r["item_type_id"], ql, r["item_name"]))
+
+        self._table.blockSignals(False)
+        self._update_sel_count()
 
     def _sort_rows(self, rows, search_mode: bool):
         col = self._sort_s_col if search_mode else self._sort_col
@@ -2152,6 +2187,64 @@ class ThongKeKhoPage(QWidget):
         if fn is None:
             return rows
         return sorted(rows, key=fn, reverse=not asc)
+
+    # ── Multi-select ──────────────────────────────────────────────────────────
+
+    def _get_checked_ids(self) -> list[int]:
+        ids = []
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                ids.append(item.data(Qt.ItemDataRole.UserRole))
+        return ids
+
+    def _update_sel_count(self):
+        ids = self._get_checked_ids()
+        n = len(ids)
+        total = self._table.rowCount()
+        all_checked = (total > 0 and n == total)
+        hdr_label = "☑" if all_checked else "☐"
+        self._table.horizontalHeaderItem(0).setText(hdr_label)
+        if n > 0:
+            self._btn_del_sel.setText(f"Xoá đã chọn ({n})")
+            self._btn_del_sel.setVisible(True)
+        else:
+            self._btn_del_sel.setVisible(False)
+
+    def _toggle_all(self):
+        total = self._table.rowCount()
+        if total == 0:
+            return
+        ids = self._get_checked_ids()
+        new_state = Qt.CheckState.Unchecked if len(ids) == total else Qt.CheckState.Checked
+        self._table.blockSignals(True)
+        for row in range(total):
+            item = self._table.item(row, 0)
+            if item:
+                item.setCheckState(new_state)
+        self._table.blockSignals(False)
+        self._update_sel_count()
+
+    def _on_delete_selected(self):
+        from PyQt6.QtWidgets import QMessageBox
+        ids = self._get_checked_ids()
+        if not ids:
+            return
+        reply = QMessageBox.question(
+            self, "Xác nhận xoá",
+            f"Xoá tồn kho của {len(ids)} mặt hàng đã chọn khỏi kho này?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        conn = database.get_conn()
+        for item_type_id in ids:
+            conn.execute(
+                "DELETE FROM inventory WHERE warehouse_id=? AND item_type_id=? AND is_shared=0",
+                (self._active_wh_id, item_type_id),
+            )
+        conn.commit()
+        self.refresh()
 
     def _download_template(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
@@ -2247,8 +2340,6 @@ class ThongKeKhoPage(QWidget):
                 item_id = item_map[ten_hang]
                 for ql, idx in [("H1", i_h1), ("H2", i_h2), ("H3", i_h3), ("H4", i_h4)]:
                     sl = _qty(row, idx)
-                    if sl <= 0:
-                        continue
                     try:
                         existing = conn.execute("""
                             SELECT id FROM inventory
@@ -2257,7 +2348,14 @@ class ThongKeKhoPage(QWidget):
                               AND received_at_unit_date IS NULL
                             LIMIT 1
                         """, (self._active_wh_id, item_id, ql)).fetchone()
-                        if existing:
+                        if sl <= 0:
+                            if existing:
+                                conn.execute(
+                                    "UPDATE inventory SET quantity=0 WHERE id=?",
+                                    (existing["id"],),
+                                )
+                                updated += 1
+                        elif existing:
                             conn.execute(
                                 "UPDATE inventory SET quantity=? WHERE id=?",
                                 (sl, existing["id"]),
@@ -2303,7 +2401,7 @@ class ThongKeKhoPage(QWidget):
         ws.title = (wh_name or "Tồn Kho")[:31]
 
         rows = self._sort_rows(self._raw, search_mode=False)
-        _write_xlsx_header(ws, self._COLS)
+        _write_xlsx_header(ws, self._COLS[1:])
         for i, r in enumerate(rows, start=1):
             mm = r["total_lifespan_months"]
             ws.append([
@@ -2354,21 +2452,11 @@ class ThongKeKhoPage(QWidget):
 class ThongKeDonViPage(QWidget):
     """Tồn kho tại Đơn Vị — mỗi đơn vị là một tab, niên hạn tính từ ngày nhập đơn vị."""
 
-    _COLS = ["STT", "Tên Hàng", "ĐVT", "H1", "H2", "H3", "H4", "Tổng"]
-    _COLS_SEARCH = ["STT", "Đơn Vị", "Tên Hàng", "ĐVT",
+    _COLS = ["", "STT", "Tên Hàng", "ĐVT", "H1", "H2", "H3", "H4", "Tổng"]
+    _COLS_SEARCH = ["", "STT", "Đơn Vị", "Tên Hàng", "ĐVT",
                     "H1", "H2", "H3", "H4", "Tổng"]
 
     _SORT_KEYS_NORMAL: dict = {
-        1: lambda r: (r["item_name"] or "").lower(),
-        2: lambda r: (r["unit_of_measure"] or "").lower(),
-        3: lambda r: r["h1"],
-        4: lambda r: r["h2"],
-        5: lambda r: r["h3"],
-        6: lambda r: r["h4"],
-        7: lambda r: r["total"],
-    }
-    _SORT_KEYS_SEARCH: dict = {
-        1: lambda r: (r["wh_code"] or "").lower(),
         2: lambda r: (r["item_name"] or "").lower(),
         3: lambda r: (r["unit_of_measure"] or "").lower(),
         4: lambda r: r["h1"],
@@ -2376,6 +2464,16 @@ class ThongKeDonViPage(QWidget):
         6: lambda r: r["h3"],
         7: lambda r: r["h4"],
         8: lambda r: r["total"],
+    }
+    _SORT_KEYS_SEARCH: dict = {
+        2: lambda r: (r["wh_code"] or "").lower(),
+        3: lambda r: (r["item_name"] or "").lower(),
+        4: lambda r: (r["unit_of_measure"] or "").lower(),
+        5: lambda r: r["h1"],
+        6: lambda r: r["h2"],
+        7: lambda r: r["h3"],
+        8: lambda r: r["h4"],
+        9: lambda r: r["total"],
     }
 
     def __init__(self):
@@ -2485,6 +2583,18 @@ class ThongKeDonViPage(QWidget):
         root.addLayout(card_h)
 
         btn_row = QHBoxLayout()
+        self._btn_del_sel = QPushButton("Xoá đã chọn (0)")
+        self._btn_del_sel.setFixedHeight(34)
+        self._btn_del_sel.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        self._btn_del_sel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._btn_del_sel.setStyleSheet(
+            "QPushButton { background: #d32f2f; color: white; border-radius: 8px;"
+            " padding: 0 16px; border: none; }"
+            " QPushButton:hover { background: #b71c1c; }"
+        )
+        self._btn_del_sel.clicked.connect(self._on_delete_selected)
+        self._btn_del_sel.setVisible(False)
+        btn_row.addWidget(self._btn_del_sel)
         btn_row.addStretch()
         for label, slot in [
             ("Tải Mẫu",    self._download_template),
@@ -2509,7 +2619,7 @@ class ThongKeDonViPage(QWidget):
         tbl_v = QVBoxLayout(tbl_card)
         tbl_v.setContentsMargins(0, 0, 0, 0)
 
-        self._smart_hdr = _SmartHeader({0})
+        self._smart_hdr = _SmartHeader({0, 1})
         self._table = QTableWidget(0, len(self._COLS))
         self._table.setHorizontalHeader(self._smart_hdr)
         self._table.setHorizontalHeaderLabels(self._COLS)
@@ -2517,7 +2627,7 @@ class ThongKeDonViPage(QWidget):
         self._table.setShowGrid(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -2525,6 +2635,13 @@ class ThongKeDonViPage(QWidget):
         self._table.cellDoubleClicked.connect(self._on_cell_dblclick)
         self._smart_hdr.sortRequested.connect(self._on_sort)
         self._smart_hdr.visToggled.connect(self._vis_btn.on_vis_toggled)
+        self._table.itemChanged.connect(
+            lambda item: self._update_sel_count() if item.column() == 0 else None
+        )
+        self._smart_hdr.setSectionsClickable(True)
+        self._smart_hdr.sectionClicked.connect(
+            lambda col: self._toggle_all() if col == 0 else None
+        )
 
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
@@ -2563,6 +2680,7 @@ class ThongKeDonViPage(QWidget):
         h = self._table.horizontalHeader()
         specs = (
             [
+                (QHeaderView.ResizeMode.Fixed, 36),
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Fixed, 90),
                 (QHeaderView.ResizeMode.Stretch, None),
@@ -2573,6 +2691,7 @@ class ThongKeDonViPage(QWidget):
                 (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Fixed, 80),
             ] if search_mode else [
+                (QHeaderView.ResizeMode.Fixed, 36),
                 (QHeaderView.ResizeMode.Fixed, 52),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 56),
@@ -2587,7 +2706,7 @@ class ThongKeDonViPage(QWidget):
             h.setSectionResizeMode(i, mode)
             if w:
                 self._table.setColumnWidth(i, w)
-        skip = {0}
+        skip = {0, 1}
         self._smart_hdr.set_skip(skip)
         self._vis_btn.bind(self._table, self._smart_hdr, cols, skip)
         if search_mode:
@@ -2793,6 +2912,7 @@ class ThongKeDonViPage(QWidget):
 
     def _load_table(self, rows, search_mode: bool = False):
         rows = self._sort_rows(rows, search_mode)
+        self._table.blockSignals(True)
         self._table.setRowCount(0)
         _orange = QColor(204, 102, 0)
 
@@ -2800,6 +2920,16 @@ class ThongKeDonViPage(QWidget):
             ri = self._table.rowCount()
             self._table.insertRow(ri)
             self._table.setRowHeight(ri, 48)
+
+            # Checkbox col 0
+            chk = QTableWidgetItem()
+            chk.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            chk.setCheckState(Qt.CheckState.Unchecked)
+            chk.setData(Qt.ItemDataRole.UserRole, r["item_type_id"])
+            self._table.setItem(ri, 0, chk)
 
             tid = r["item_type_id"]
 
@@ -2859,7 +2989,7 @@ class ThongKeDonViPage(QWidget):
                     (str(r["total"]),      True,  None,        None),
                 ]
 
-            for c, (val, center, clr, tip) in enumerate(cells):
+            for c, (val, center, clr, tip) in enumerate(cells, start=1):
                 cell = QTableWidgetItem(val)
                 cell.setFont(QFont(FONT, 12))
                 if center:
@@ -2874,12 +3004,15 @@ class ThongKeDonViPage(QWidget):
 
             # Store edit key on H1-H4 cells so double-click knows what to update
             wh_id = r["wh_id"] if search_mode else self._active_wh_id
-            h_start = 4 if search_mode else 3
+            h_start = 5 if search_mode else 4
             for qi, ql in enumerate(("H1", "H2", "H3", "H4")):
                 item = self._table.item(ri, h_start + qi)
                 if item:
                     item.setData(Qt.ItemDataRole.UserRole,
                                  (wh_id, r["item_type_id"], ql, r["item_name"]))
+
+        self._table.blockSignals(False)
+        self._update_sel_count()
 
     def _on_cell_dblclick(self, row: int, col: int):
         item = self._table.item(row, col)
@@ -2909,6 +3042,64 @@ class ThongKeDonViPage(QWidget):
         if fn is None:
             return rows
         return sorted(rows, key=fn, reverse=not asc)
+
+    # ── Multi-select ──────────────────────────────────────────────────────────
+
+    def _get_checked_ids(self) -> list[int]:
+        ids = []
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                ids.append(item.data(Qt.ItemDataRole.UserRole))
+        return ids
+
+    def _update_sel_count(self):
+        ids = self._get_checked_ids()
+        n = len(ids)
+        total = self._table.rowCount()
+        all_checked = (total > 0 and n == total)
+        hdr_label = "☑" if all_checked else "☐"
+        self._table.horizontalHeaderItem(0).setText(hdr_label)
+        if n > 0:
+            self._btn_del_sel.setText(f"Xoá đã chọn ({n})")
+            self._btn_del_sel.setVisible(True)
+        else:
+            self._btn_del_sel.setVisible(False)
+
+    def _toggle_all(self):
+        total = self._table.rowCount()
+        if total == 0:
+            return
+        ids = self._get_checked_ids()
+        new_state = Qt.CheckState.Unchecked if len(ids) == total else Qt.CheckState.Checked
+        self._table.blockSignals(True)
+        for row in range(total):
+            item = self._table.item(row, 0)
+            if item:
+                item.setCheckState(new_state)
+        self._table.blockSignals(False)
+        self._update_sel_count()
+
+    def _on_delete_selected(self):
+        from PyQt6.QtWidgets import QMessageBox
+        ids = self._get_checked_ids()
+        if not ids:
+            return
+        reply = QMessageBox.question(
+            self, "Xác nhận xoá",
+            f"Xoá tồn kho của {len(ids)} mặt hàng đã chọn khỏi đơn vị này?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        conn = database.get_conn()
+        for item_type_id in ids:
+            conn.execute(
+                "DELETE FROM inventory WHERE warehouse_id=? AND item_type_id=? AND is_shared=0",
+                (self._active_wh_id, item_type_id),
+            )
+        conn.commit()
+        self.refresh()
 
     def _download_template(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
@@ -3006,8 +3197,6 @@ class ThongKeDonViPage(QWidget):
                 item_id = item_map[ten_hang]
                 for ql, idx in [("H1", i_h1), ("H2", i_h2), ("H3", i_h3), ("H4", i_h4)]:
                     sl = _qty(row, idx)
-                    if sl <= 0:
-                        continue
                     try:
                         existing = conn.execute("""
                             SELECT id FROM inventory
@@ -3015,7 +3204,14 @@ class ThongKeDonViPage(QWidget):
                               AND quality_level=? AND is_shared=0
                             LIMIT 1
                         """, (self._active_wh_id, item_id, ql)).fetchone()
-                        if existing:
+                        if sl <= 0:
+                            if existing:
+                                conn.execute(
+                                    "UPDATE inventory SET quantity=0 WHERE id=?",
+                                    (existing["id"],),
+                                )
+                                updated += 1
+                        elif existing:
                             conn.execute(
                                 "UPDATE inventory SET quantity=?, received_at_unit_date=? WHERE id=?",
                                 (sl, ngay_nhap, existing["id"]),
@@ -3062,7 +3258,7 @@ class ThongKeDonViPage(QWidget):
         ws.title = (wh_name or "Tồn Kho")[:31]
 
         rows = self._sort_rows(self._raw, search_mode=False)
-        _write_xlsx_header(ws, self._COLS)
+        _write_xlsx_header(ws, self._COLS[1:])
         for i, r in enumerate(rows, start=1):
             ws.append([
                 i, r["item_name"], r["unit_of_measure"],
