@@ -935,7 +935,7 @@ class _H4DetailPanel(QWidget):
 class ThongKeSharedPage(QWidget):
     """Hàng dùng chung – tồn kho (H1–H3), đang cho mượn, chờ thanh xử lý (H4)."""
 
-    _COLS_TON   = ["STT", "Tên Hàng", "ĐVT", "H3", "H4"]
+    _COLS_TON   = ["", "STT", "Tên Hàng", "ĐVT", "H3", "H4"]
     _COLS_MUON  = ["STT", "Số Phiếu", "Ngày Mượn", "Tên Hàng",
                    "ĐVT", "Số Lượng", "Đơn Vị / Người Mượn"]
     _COLS_H4    = ["STT", "Số Phiếu", "Ngày", "Kho", "Số M.Hàng", ""]
@@ -948,10 +948,10 @@ class ThongKeSharedPage(QWidget):
 
     _SORT_KEYS: dict[str, dict] = {
         "ton": {
-            1: lambda r: (r["item_name"] or "").lower(),
-            2: lambda r: (r["unit_of_measure"] or "").lower(),
-            3: lambda r: r["h3"],
-            4: lambda r: r["h4"],
+            2: lambda r: (r["item_name"] or "").lower(),
+            3: lambda r: (r["unit_of_measure"] or "").lower(),
+            4: lambda r: r["h3"],
+            5: lambda r: r["h4"],
         },
         "muon": {
             1: lambda r: (r["reference_number"] or "").lower(),
@@ -1123,6 +1123,52 @@ class ThongKeSharedPage(QWidget):
         tab_h.addWidget(self._vis_btn)
         self._apply_tab_style()
         root.addWidget(tab_frame)
+        root.addSpacing(4)
+
+        # Nút xoá nhiều (chỉ hiện khi có chọn ở tab Tồn Kho)
+        self._del_ton_widget = QWidget()
+        self._del_ton_widget.setStyleSheet("background: transparent;")
+        del_h = QHBoxLayout(self._del_ton_widget)
+        del_h.setContentsMargins(0, 0, 0, 0)
+        self._btn_del_ton = QPushButton("Xoá đã chọn (0)")
+        self._btn_del_ton.setFixedHeight(34)
+        self._btn_del_ton.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        self._btn_del_ton.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._btn_del_ton.setStyleSheet(
+            "QPushButton { background: #d32f2f; color: white; border-radius: 8px;"
+            " padding: 0 16px; border: none; }"
+            " QPushButton:hover { background: #b71c1c; }"
+        )
+        self._btn_del_ton.clicked.connect(self._on_delete_selected_ton)
+        del_h.addWidget(self._btn_del_ton)
+        del_h.addStretch()
+        self._del_ton_widget.setVisible(False)
+        root.addWidget(self._del_ton_widget)
+
+        # Excel buttons (chỉ hiện khi chọn kho cụ thể ở tab Tồn Kho)
+        self._excel_row_widget = QWidget()
+        self._excel_row_widget.setStyleSheet("background: transparent;")
+        excel_h = QHBoxLayout(self._excel_row_widget)
+        excel_h.setContentsMargins(0, 0, 0, 0)
+        excel_h.setSpacing(8)
+        excel_h.addStretch()
+        for _label, _attr in [
+            ("Tải Mẫu",    "_btn_tai_mau"),
+            ("Nhập Excel", "_btn_nhap"),
+            ("Xuất Excel", "_btn_xuat_xl"),
+        ]:
+            _btn = QPushButton(_label)
+            _btn.setFixedHeight(34)
+            _btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+            _btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            _btn.setStyleSheet(_EXPORT_BTN_STYLE)
+            excel_h.addWidget(_btn)
+            setattr(self, _attr, _btn)
+        self._btn_tai_mau.clicked.connect(self._download_template_shared)
+        self._btn_nhap.clicked.connect(self._import_excel_shared)
+        self._btn_xuat_xl.clicked.connect(self._export_excel_shared)
+        self._excel_row_widget.setVisible(False)
+        root.addWidget(self._excel_row_widget)
         root.addSpacing(8)
 
         # table card
@@ -1151,6 +1197,15 @@ class ThongKeSharedPage(QWidget):
         self._table.cellClicked.connect(self._on_h4_cell_clicked)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self._table.itemChanged.connect(
+            lambda item: self._update_sel_count_ton()
+            if self._active_tab == "ton" and item.column() == 0 else None
+        )
+        self._smart_hdr.setSectionsClickable(True)
+        self._smart_hdr.sectionClicked.connect(
+            lambda col: self._toggle_all_ton()
+            if self._active_tab == "ton" and col == 0 else None
+        )
         tbl_v.addWidget(self._table)
         root.addWidget(tbl_card, 1)
 
@@ -1181,13 +1236,16 @@ class ThongKeSharedPage(QWidget):
         self._smart_hdr._sasc = sa
         self._apply_tab_style()
         is_muon = (key == "muon")
-        self._wh_combo.setVisible(True)
+        self._wh_combo.setVisible(not is_muon)
         self._search.setVisible(not is_muon)
         self._muon_search.setVisible(is_muon)
         if key == "ton":
             self._search.setPlaceholderText("Tìm mặt hàng...")
         elif key == "phieu_h4":
             self._search.setPlaceholderText("Tìm số phiếu / kho...")
+        if key != "ton":
+            self._del_ton_widget.setVisible(False)
+        self._update_excel_btns()
         self._apply_filter()
 
     def _on_wh_changed(self, _):
@@ -1195,7 +1253,16 @@ class ThongKeSharedPage(QWidget):
         if data is None:  # separator — không làm gì
             return
         self._active_wh_id, self._active_wh_type = data
+        self._update_excel_btns()
         self._reload_data()
+
+    def _update_excel_btns(self):
+        visible = (
+            self._active_tab == "ton"
+            and self._active_wh_id is not None
+            and self._active_wh_type == "TONG"
+        )
+        self._excel_row_widget.setVisible(visible)
 
     def _on_nhap_moi(self):
         from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
@@ -1222,6 +1289,165 @@ class ThongKeSharedPage(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
+    # ── Excel (Hàng dùng chung) ───────────────────────────────────────────────
+
+    def _download_template_shared(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu File Mẫu", "mau_hang_dung_chung.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            conn = database.get_conn()
+            items = sorted(
+                conn.execute(
+                    "SELECT name, unit_of_measure FROM item_types WHERE is_active=1"
+                ).fetchall(),
+                key=lambda r: _az_key(r["name"]),
+            )
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Hàng Dùng Chung"
+            _write_xlsx_header(ws, ["STT", "Tên hàng", "ĐVT", "H3", "H4", "Tổng"])
+            for i, r in enumerate(items, 1):
+                ws.append([i, r["name"], r["unit_of_measure"], 0, 0, 0])
+            _auto_width_xlsx(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã lưu mẫu {len(items)} mặt hàng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _import_excel_shared(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self) or self._active_wh_id is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn File Excel", "", "Excel (*.xlsx *.xls)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, data_only=True)
+            ws = wb.active
+            all_rows = [[c.value for c in row] for row in ws.iter_rows()]
+            if len(all_rows) < 2:
+                QMessageBox.information(self, "Thông báo", "File không có dữ liệu.")
+                return
+
+            hdr = [str(c or "").strip() for c in all_rows[0]]
+            i_ten = _find_col(hdr, "tên hàng", "ten hang") or 1
+            i_h3  = _find_col(hdr, "h3")
+            i_h4  = _find_col(hdr, "h4")
+            if i_h3 is None: i_h3 = 3
+            if i_h4 is None: i_h4 = 4
+
+            conn = database.get_conn()
+            item_map = {_norm_name(r["name"]): r["id"] for r in conn.execute(
+                "SELECT id, name FROM item_types WHERE is_active=1"
+            ).fetchall()}
+
+            def _qty(row, idx):
+                v = row[idx] if len(row) > idx else None
+                if v is None or str(v).strip() == "":
+                    return 0
+                try:
+                    return int(float(str(v)))
+                except (ValueError, TypeError):
+                    return 0
+
+            inserted = updated = skipped = 0
+            errors = []
+            for i, row in enumerate(all_rows[1:], start=2):
+                if not row or not row[i_ten]:
+                    continue
+                ten = _norm_name(row[i_ten])
+                if not ten:
+                    continue
+                if ten not in item_map:
+                    errors.append(f"Dòng {i}: không tìm thấy '{ten}'")
+                    skipped += 1
+                    continue
+                item_id = item_map[ten]
+                for ql, idx in [("H3", i_h3), ("H4", i_h4)]:
+                    sl = _qty(row, idx)
+                    try:
+                        existing = conn.execute("""
+                            SELECT id FROM inventory
+                            WHERE warehouse_id=? AND item_type_id=?
+                              AND quality_level=? AND is_shared=1
+                            LIMIT 1
+                        """, (self._active_wh_id, item_id, ql)).fetchone()
+                        if sl <= 0:
+                            if existing:
+                                conn.execute(
+                                    "UPDATE inventory SET quantity=0 WHERE id=?",
+                                    (existing["id"],),
+                                )
+                                updated += 1
+                        elif existing:
+                            conn.execute(
+                                "UPDATE inventory SET quantity=? WHERE id=?",
+                                (sl, existing["id"]),
+                            )
+                            updated += 1
+                        else:
+                            conn.execute(
+                                "INSERT INTO inventory"
+                                " (warehouse_id, item_type_id, quality_level, quantity, is_shared)"
+                                " VALUES (?, ?, ?, ?, 1)",
+                                (self._active_wh_id, item_id, ql, sl),
+                            )
+                            inserted += 1
+                    except Exception as row_err:
+                        errors.append(f"Dòng {i} {ql}: {row_err}")
+                        skipped += 1
+            conn.commit()
+            msg = f"Thêm mới: {inserted}   Cập nhật: {updated}   Bỏ qua: {skipped}"
+            if errors:
+                msg += "\n\nChi tiết lỗi:\n" + "\n".join(errors[:10])
+            QMessageBox.information(self, "Nhập hoàn tất", msg)
+            self.refresh()
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _export_excel_shared(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        if not _check_openpyxl(self) or self._active_wh_id is None:
+            return
+        wh_name = next(
+            (self._wh_combo.itemText(i)
+             for i in range(self._wh_combo.count())
+             if self._wh_combo.itemData(i) == (self._active_wh_id, "TONG")),
+            "Kho",
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Xuất Excel", f"hang_dung_chung_{wh_name}.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = wh_name[:31]
+            _write_xlsx_header(ws, ["STT", "Tên hàng", "ĐVT", "H3", "H4", "Tổng"])
+            rows = sorted(self._raw_ton, key=lambda r: _az_key(r["item_name"]))
+            for i, r in enumerate(rows, 1):
+                ws.append([
+                    i, r["item_name"], r["unit_of_measure"],
+                    r["h3"], r["h4"], r["h3"] + r["h4"],
+                ])
+            _auto_width_xlsx(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
     # ── Data ──────────────────────────────────────────────────────────────────
 
     def refresh(self):
@@ -1236,16 +1462,9 @@ class ThongKeSharedPage(QWidget):
         tong_rows = conn.execute(
             "SELECT id, name FROM warehouses WHERE type='TONG' AND is_active=1 ORDER BY name"
         ).fetchall()
-        dv_rows = conn.execute(
-            "SELECT id, name FROM warehouses WHERE type='DON_VI' AND is_active=1 ORDER BY name"
-        ).fetchall()
         self._wh_combo.addItem("Tất cả kho", (None, "TONG"))
         for r in tong_rows:
             self._wh_combo.addItem(r["name"], (r["id"], "TONG"))
-        self._wh_combo.insertSeparator(self._wh_combo.count())
-        self._wh_combo.addItem("Tất cả đơn vị", (None, "DON_VI"))
-        for r in dv_rows:
-            self._wh_combo.addItem(r["name"], (r["id"], "DON_VI"))
         restored = False
         if current is not None:
             for i in range(self._wh_combo.count()):
@@ -1369,7 +1588,9 @@ class ThongKeSharedPage(QWidget):
 
     # ── Table helpers ─────────────────────────────────────────────────────────
 
-    def _setup_cols(self, cols: list[str], specs: list[tuple]):
+    def _setup_cols(self, cols: list[str], specs: list[tuple], skip: set | None = None):
+        if skip is None:
+            skip = {0}
         self._table.setColumnCount(len(cols))
         self._table.setHorizontalHeaderLabels(cols)
         for i in range(len(cols)):
@@ -1379,7 +1600,6 @@ class ThongKeSharedPage(QWidget):
             h.setSectionResizeMode(i, mode)
             if w:
                 self._table.setColumnWidth(i, w)
-        skip = {0}
         self._smart_hdr.set_skip(skip)
         self._vis_btn.bind(self._table, self._smart_hdr, cols, skip)
         self._smart_hdr.viewport().update()
@@ -1410,21 +1630,93 @@ class ThongKeSharedPage(QWidget):
         rows = self._sort_rows(rows)
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_TON, [
-            (F, 52), (S, None), (F, 60), (F, 80), (F, 80),
-        ])
+            (F, 36), (F, 52), (S, None), (F, 60), (F, 80), (F, 80),
+        ], skip={0, 1})
+        self._table.blockSignals(True)
         self._table.setRowCount(0)
         for i, r in enumerate(rows):
             ri = self._table.rowCount()
             self._table.insertRow(ri)
             self._table.setRowHeight(ri, 48)
+            # Checkbox col 0
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            chk.setCheckState(Qt.CheckState.Unchecked)
+            chk.setData(Qt.ItemDataRole.UserRole, r["item_type_id"])
+            self._table.setItem(ri, 0, chk)
             for c, args in enumerate([
                 (str(i + 1),                              True),
                 (r["item_name"],                          False),
                 (r["unit_of_measure"],                    True),
                 (str(r["h3"]) if r["h3"] else "—",       True),
                 (str(r["h4"]) if r["h4"] else "—",       True, "red" if r["h4"] else None),
-            ]):
+            ], start=1):
                 self._table.setItem(ri, c, self._mk(*args))
+        self._table.blockSignals(False)
+        self._update_sel_count_ton()
+
+    # ── Multi-select (tab Tồn Kho) ────────────────────────────────────────────
+
+    def _get_checked_ids_ton(self) -> list[int]:
+        ids = []
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                ids.append(item.data(Qt.ItemDataRole.UserRole))
+        return ids
+
+    def _update_sel_count_ton(self):
+        ids = self._get_checked_ids_ton()
+        n = len(ids)
+        total = self._table.rowCount()
+        hdr = self._table.horizontalHeaderItem(0)
+        if hdr:
+            hdr.setText("☑" if total > 0 and n == total else "☐")
+        if n > 0:
+            self._btn_del_ton.setText(f"Xoá đã chọn ({n})")
+            self._del_ton_widget.setVisible(True)
+        else:
+            self._del_ton_widget.setVisible(False)
+
+    def _toggle_all_ton(self):
+        total = self._table.rowCount()
+        if total == 0:
+            return
+        checked = len(self._get_checked_ids_ton())
+        new_state = Qt.CheckState.Unchecked if checked == total else Qt.CheckState.Checked
+        self._table.blockSignals(True)
+        for row in range(total):
+            item = self._table.item(row, 0)
+            if item:
+                item.setCheckState(new_state)
+        self._table.blockSignals(False)
+        self._update_sel_count_ton()
+
+    def _on_delete_selected_ton(self):
+        from PyQt6.QtWidgets import QMessageBox
+        ids = self._get_checked_ids_ton()
+        if not ids:
+            return
+        reply = QMessageBox.question(
+            self, "Xác nhận xoá",
+            f"Xoá tồn kho dùng chung của {len(ids)} mặt hàng đã chọn?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        conn = database.get_conn()
+        wh_filter = ""
+        params_base: list = []
+        if self._active_wh_id is not None:
+            wh_filter = " AND warehouse_id=?"
+            params_base = [self._active_wh_id]
+        for item_type_id in ids:
+            conn.execute(
+                f"DELETE FROM inventory WHERE item_type_id=? AND is_shared=1{wh_filter}",
+                [item_type_id] + params_base,
+            )
+        conn.commit()
+        self.refresh()
 
     def _load_muon(self, rows):
         rows = self._sort_rows(rows)
@@ -1916,11 +2208,11 @@ class ThongKeKhoPage(QWidget):
                    t.code AS item_code, t.name AS item_name,
                    t.unit_of_measure,
                    t.total_lifespan_months,
-                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
-                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
-                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
-                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
-                   SUM(i.quantity) AS total,
+                   COALESCE(SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END), 0) AS h1,
+                   COALESCE(SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END), 0) AS h2,
+                   COALESCE(SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END), 0) AS h3,
+                   COALESCE(SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END), 0) AS h4,
+                   COALESCE(SUM(i.quantity), 0) AS total,
                    (SELECT tl.unit_price
                     FROM transaction_lines tl
                     JOIN transactions tx ON tx.id = tl.transaction_id
@@ -1929,9 +2221,10 @@ class ThongKeKhoPage(QWidget):
                       AND COALESCE(tl.unit_price, 0) > 0
                     ORDER BY tx.transaction_date DESC, tl.id DESC
                     LIMIT 1) AS don_gia
-            FROM inventory i
-            JOIN item_types t ON t.id = i.item_type_id
-            WHERE i.warehouse_id = ? AND i.is_shared = 0 AND i.quantity > 0
+            FROM item_types t
+            LEFT JOIN inventory i ON i.item_type_id = t.id
+                AND i.warehouse_id = ? AND i.is_shared = 0
+            WHERE t.is_active = 1
             GROUP BY t.id
             ORDER BY t.name
         """, (self._active_wh_id, self._active_wh_id)).fetchall()
@@ -2752,11 +3045,11 @@ class ThongKeDonViPage(QWidget):
                    t.code AS item_code, t.name AS item_name,
                    t.unit_of_measure,
                    t.total_lifespan_months,
-                   SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
-                   SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
-                   SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
-                   SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
-                   SUM(i.quantity) AS total,
+                   COALESCE(SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END), 0) AS h1,
+                   COALESCE(SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END), 0) AS h2,
+                   COALESCE(SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END), 0) AS h3,
+                   COALESCE(SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END), 0) AS h4,
+                   COALESCE(SUM(i.quantity), 0) AS total,
                    MAX(CASE
                        WHEN i.received_at_unit_date IS NOT NULL
                        THEN CAST(
@@ -2764,9 +3057,10 @@ class ThongKeDonViPage(QWidget):
                             - julianday(i.received_at_unit_date)) / 30.44 AS INTEGER)
                        ELSE NULL
                    END) AS max_months
-            FROM inventory i
-            JOIN item_types t ON t.id = i.item_type_id
-            WHERE i.warehouse_id = ? AND i.is_shared = 0 AND i.quantity > 0
+            FROM item_types t
+            LEFT JOIN inventory i ON i.item_type_id = t.id
+                AND i.warehouse_id = ? AND i.is_shared = 0
+            WHERE t.is_active = 1
             GROUP BY t.id
             ORDER BY t.name
         """, (self._active_wh_id,)).fetchall()
