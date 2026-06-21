@@ -857,10 +857,16 @@ class XuatKhoFormDialog(QDialog):
         elif self._subtype == "shared_loan":
             if self._shared_dest == "unit":
                 to_wh_id = self.f_to_wh.currentData()
+                if not to_wh_id:
+                    self._err("Vui lòng chọn Đơn Vị Mượn.")
+                    return None
                 recipient = ""
             else:
                 to_wh_id = None
                 recipient = self.f_event_name.text().strip()
+                if not recipient:
+                    self._err("Vui lòng nhập Tên Sự Kiện Mượn.")
+                    return None
             transport = self.f_transport.text().strip()
             notes_txt = self.f_notes.toPlainText().strip()
         else:

@@ -112,12 +112,14 @@ class LineItemRow(QWidget):
     def __init__(self, item_types, show_price: bool = True,
                  show_quality: bool = False, max_qty_map: dict | None = None,
                  dynamic_price_by_category: bool = False,
+                 quality_aware_max: bool = False,
                  parent=None):
         super().__init__(parent)
         self._item_types = item_types
         self._show_quality = show_quality
-        self._max_qty_map: dict[int, int] = max_qty_map or {}
+        self._max_qty_map: dict = max_qty_map or {}
         self._dynamic_price_by_category = dynamic_price_by_category
+        self._quality_aware_max = quality_aware_max
         self.setStyleSheet("background: transparent;")
 
         h = QHBoxLayout(self)
@@ -227,6 +229,7 @@ class LineItemRow(QWidget):
 
         self.combo.currentIndexChanged.connect(self._on_item_changed)
         self.spin_qty.valueChanged.connect(self._recalc)
+        self.combo_quality.currentIndexChanged.connect(self._on_quality_changed)
 
     def _setup_search(self):
         completer = self.combo.completer()
@@ -244,11 +247,15 @@ class LineItemRow(QWidget):
 
         # Remaining quantity
         if self._max_qty_map and it:
-            max_q = self._max_qty_map.get(it.id, 0)
+            if self._quality_aware_max:
+                ql = self.combo_quality.currentText()
+                max_q = self._max_qty_map.get((it.id, ql), 0)
+            else:
+                max_q = self._max_qty_map.get(it.id, 0)
             self.spin_qty.setRange(1, max(1, max_q))
             if self.spin_qty.value() > max_q:
                 self.spin_qty.setValue(max(1, max_q))
-            self.lbl_remaining.setText(f"≤ {max_q}")
+            self.lbl_remaining.setText(f"≤ {max_q}" if max_q else "Hết hàng")
             self.lbl_remaining.setVisible(True)
         elif it and not self._max_qty_map and hasattr(it, 'qty') and it.qty > 0:
             max_q = it.qty
@@ -291,7 +298,21 @@ class LineItemRow(QWidget):
         self._recalc()
         self.item_changed.emit()
 
-    def update_max_qty_map(self, max_qty_map: dict[int, int]):
+    def _on_quality_changed(self, _):
+        if not self._quality_aware_max or not self._max_qty_map:
+            return
+        it = self.combo.currentData()
+        if not it:
+            return
+        ql = self.combo_quality.currentText()
+        max_q = self._max_qty_map.get((it.id, ql), 0)
+        self.spin_qty.setRange(1, max(1, max_q))
+        if self.spin_qty.value() > max_q:
+            self.spin_qty.setValue(max(1, max_q))
+        self.lbl_remaining.setText(f"≤ {max_q}" if max_q else "Hết hàng")
+        self.lbl_remaining.setVisible(True)
+
+    def update_max_qty_map(self, max_qty_map: dict):
         self._max_qty_map = max_qty_map
         self.lbl_remaining.setVisible(bool(max_qty_map))
         self._on_item_changed(None)
@@ -562,7 +583,7 @@ class NhapKhoFormDialog(QDialog):
         root.addSpacing(6)
 
         show_price   = (self._subtype in ("new", "from_unit"))
-        show_quality = (self._subtype == "from_unit")
+        show_quality = (self._subtype in ("from_unit", "shared_from_wh"))
         self._show_price   = show_price
         self._show_quality = show_quality
 
@@ -573,10 +594,10 @@ class NhapKhoFormDialog(QDialog):
         ch.setContentsMargins(6, 5, 6, 5)
         ch.setSpacing(6)
         col_defs = [("Mặt Hàng", 2, None), ("ĐVT", 0, 56), ("Số lượng", 0, 80)]
-        if self._is_return_mode or self._subtype == "from_unit":
+        if self._is_return_mode or self._subtype in ("from_unit", "shared_from_wh"):
             col_defs += [("Còn lại", 0, 66)]
         if show_quality:
-            col_defs += [("Mức HH", 0, 70)]
+            col_defs += [("Mức SP *", 0, 70)]
         if show_price:
             col_defs += [("Đơn Giá", 0, 130), ("Thành Tiền", 0, 120)]
         col_defs += [("Ghi chú", 1, None), ("", 0, 32)]
@@ -833,13 +854,15 @@ class NhapKhoFormDialog(QDialog):
             return
         conn = database.get_conn()
         rows = conn.execute("""
-            SELECT it.id, SUM(i.quantity) AS total_qty
+            SELECT it.id, i.quality_level, SUM(i.quantity) AS qty
             FROM inventory i
             JOIN item_types it ON it.id = i.item_type_id
             WHERE i.warehouse_id=? AND i.is_shared=0 AND i.quantity > 0
-            GROUP BY it.id HAVING total_qty > 0 ORDER BY it.name
+            GROUP BY it.id, i.quality_level HAVING qty > 0
+            ORDER BY it.name, i.quality_level
         """, (wh_id,)).fetchall()
-        self._loan_max_qty_map = {r["id"]: int(r["total_qty"]) for r in rows}
+        # Keyed by (item_id, quality_level) → available qty
+        self._loan_max_qty_map = {(r["id"], r["quality_level"]): int(r["qty"]) for r in rows}
         item_ids = {r["id"] for r in rows}
         self._loan_item_types_filtered = [it for it in self._item_types if it.id in item_ids]
         if self._loan_item_types_filtered:
@@ -888,15 +911,24 @@ class NhapKhoFormDialog(QDialog):
             return  # chưa chọn đơn vị → không thêm row trống
         if self._subtype == "from_unit":
             item_types = self._unit_item_types if self._unit_item_types else self._item_types
+        elif self._subtype == "shared_from_wh" and self._loan_item_types_filtered:
+            item_types = self._loan_item_types_filtered
         elif self._is_return_mode and self._loan_item_types_filtered:
             item_types = self._loan_item_types_filtered
         else:
             item_types = self._item_types
-        max_map = self._loan_max_qty_map if self._is_return_mode and self._loan_max_qty_map else {}
+        is_shared_from_wh = (self._subtype == "shared_from_wh")
+        if is_shared_from_wh:
+            max_map = self._loan_max_qty_map
+        elif self._is_return_mode and self._loan_max_qty_map:
+            max_map = self._loan_max_qty_map
+        else:
+            max_map = {}
         row = LineItemRow(item_types, show_price=self._show_price,
                           show_quality=self._show_quality,
                           max_qty_map=max_map or None,
                           dynamic_price_by_category=(self._subtype == "from_unit"),
+                          quality_aware_max=is_shared_from_wh,
                           parent=self)
         if line:
             row.fill(line)

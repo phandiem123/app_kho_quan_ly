@@ -32,6 +32,7 @@ class ReceiptLine:
     unit_price: float = 0.0
     notes: str = ""
     quality_level: str = "H1"
+    quality_level_from: str | None = None  # quality tại kho nguồn (shared_from_wh)
     id: int | None = None
     is_shared: bool = False  # runtime-only; DC lines in from_unit handled as auto-TRA
 
@@ -125,7 +126,8 @@ def get_lines(transaction_id: int) -> list[ReceiptLine]:
     rows = conn.execute("""
         SELECT tl.id, tl.item_type_id, it.code AS item_code,
                it.name AS item_name, it.unit_of_measure,
-               tl.quantity, tl.unit_price, tl.notes, tl.quality_level_to
+               tl.quantity, tl.unit_price, tl.notes,
+               tl.quality_level_from, tl.quality_level_to
         FROM transaction_lines tl
         JOIN item_types it ON it.id = tl.item_type_id
         WHERE tl.transaction_id = ?
@@ -142,6 +144,7 @@ def get_lines(transaction_id: int) -> list[ReceiptLine]:
             unit_price=float(r["unit_price"] or 0),
             notes=r["notes"] or "",
             quality_level=r["quality_level_to"] or "H1",
+            quality_level_from=r["quality_level_from"],
         )
         for r in rows
     ]
@@ -201,8 +204,12 @@ def insert(receipt: Receipt) -> int:
     tx_id = cur.lastrowid
 
     for line in receipt.lines:
-        ql = line.quality_level if subtype == "from_unit" else _QUALITY[subtype]
-        ql_from = ql if subtype == "from_unit" else None
+        if subtype in ("from_unit", "shared_from_wh"):
+            ql_from = line.quality_level
+            ql      = "H3" if subtype == "shared_from_wh" else line.quality_level
+        else:
+            ql_from = None
+            ql      = _QUALITY[subtype]
         conn.execute("""
             INSERT INTO transaction_lines
                 (transaction_id, item_type_id, quality_level_from,
@@ -217,13 +224,13 @@ def insert(receipt: Receipt) -> int:
                 SELECT received_at_unit_date FROM inventory
                 WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND quantity > 0
                 ORDER BY COALESCE(received_at_unit_date,'9999') ASC LIMIT 1
-            """, (receipt.from_warehouse_id, line.item_type_id, ql)).fetchone()
+            """, (receipt.from_warehouse_id, line.item_type_id, ql_from)).fetchone()
             rad = src["received_at_unit_date"] if src else None
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
                 WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
-            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql))
-            _upsert_inv_dated(conn, receipt.to_warehouse_id, line.item_type_id, ql, line.quantity, rad)
+            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql_from))
+            _upsert_inv_dated(conn, receipt.to_warehouse_id, line.item_type_id, ql_from, line.quantity, rad)
         elif subtype in ("unit_return", "shared_return") and receipt.from_warehouse_id:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
@@ -235,8 +242,8 @@ def insert(receipt: Receipt) -> int:
         elif subtype == "shared_from_wh" and receipt.from_warehouse_id:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                WHERE warehouse_id=? AND item_type_id=? AND is_shared=0
-            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id))
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=0
+            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql_from))
             _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H3", line.quantity, is_shared=1)
 
     conn.commit()
@@ -298,8 +305,12 @@ def update(receipt: Receipt) -> None:
           receipt.loan_transaction_id, receipt.id))
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (receipt.id,))
     for line in receipt.lines:
-        ql = line.quality_level if subtype == "from_unit" else _QUALITY[subtype]
-        ql_from = ql if subtype == "from_unit" else None
+        if subtype in ("from_unit", "shared_from_wh"):
+            ql_from = line.quality_level
+            ql      = "H3" if subtype == "shared_from_wh" else line.quality_level
+        else:
+            ql_from = None
+            ql      = _QUALITY[subtype]
         conn.execute("""
             INSERT INTO transaction_lines
                 (transaction_id, item_type_id, quality_level_from,
@@ -314,13 +325,13 @@ def update(receipt: Receipt) -> None:
                 SELECT received_at_unit_date FROM inventory
                 WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND quantity > 0
                 ORDER BY COALESCE(received_at_unit_date,'9999') ASC LIMIT 1
-            """, (receipt.from_warehouse_id, line.item_type_id, ql)).fetchone()
+            """, (receipt.from_warehouse_id, line.item_type_id, ql_from)).fetchone()
             rad = src["received_at_unit_date"] if src else None
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
                 WHERE warehouse_id=? AND item_type_id=? AND quality_level=?
-            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql))
-            _upsert_inv_dated(conn, receipt.to_warehouse_id, line.item_type_id, ql, line.quantity, rad)
+            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql_from))
+            _upsert_inv_dated(conn, receipt.to_warehouse_id, line.item_type_id, ql_from, line.quantity, rad)
         elif subtype in ("unit_return", "shared_return") and receipt.from_warehouse_id:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
@@ -332,8 +343,8 @@ def update(receipt: Receipt) -> None:
         elif subtype == "shared_from_wh" and receipt.from_warehouse_id:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                WHERE warehouse_id=? AND item_type_id=? AND is_shared=0
-            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id))
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=0
+            """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql_from))
             _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H3", line.quantity, is_shared=1)
     conn.commit()
 
@@ -376,7 +387,8 @@ def delete(receipt_id: int) -> None:
                     UPDATE inventory SET quantity = MAX(0, quantity - ?)
                     WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
                 """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
-                _upsert_inv(conn, old["from_warehouse_id"], line.item_type_id, "H1", line.quantity, is_shared=0)
+                restore_ql = line.quality_level_from or "H1"
+                _upsert_inv(conn, old["from_warehouse_id"], line.item_type_id, restore_ql, line.quantity, is_shared=0)
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (receipt_id,))
     conn.execute("DELETE FROM transactions WHERE id=?", (receipt_id,))
     conn.commit()

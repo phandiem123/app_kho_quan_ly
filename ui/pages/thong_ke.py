@@ -930,13 +930,106 @@ class _H4DetailPanel(QWidget):
         return 160 + max(1, self._line_count) * 34
 
 
+class _MuonDetailPanel(QWidget):
+    def __init__(self, row: dict, parent=None):
+        super().__init__(parent)
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("""
+            _MuonDetailPanel { background: #f5f5f5; }
+            QLabel { background: transparent; border: none; }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 14, 28, 14)
+        root.setSpacing(8)
+
+        title = QLabel("Chi Tiết Phiếu Mượn")
+        title.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+        title.setStyleSheet("color: #111;")
+        root.addWidget(title)
+
+        def pair(label, value):
+            w = QWidget(); w.setStyleSheet("background: transparent;")
+            hl = QHBoxLayout(w); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(6)
+            lbl = QLabel(label + ":"); lbl.setFont(QFont(FONT, 11))
+            lbl.setStyleSheet("color: #888;"); lbl.setFixedWidth(100)
+            val = QLabel(value or "—"); val.setFont(QFont(FONT, 11, QFont.Weight.Medium))
+            val.setStyleSheet("color: #111;")
+            hl.addWidget(lbl); hl.addWidget(val, 1)
+            return w
+
+        info = QHBoxLayout(); info.setSpacing(32)
+        info.addWidget(pair("Số Phiếu",    row["reference_number"]))
+        info.addWidget(pair("Ngày Mượn",   row["transaction_date"]))
+        info.addWidget(pair("Đơn Vị / Sự Kiện", row["borrower"] or "—"))
+        info.addStretch()
+        root.addLayout(info)
+
+        sub_lbl = QLabel("Danh Sách Mặt Hàng")
+        sub_lbl.setFont(QFont(FONT, 10, QFont.Weight.Bold))
+        sub_lbl.setStyleSheet("color: #555;")
+        root.addWidget(sub_lbl)
+
+        conn = database.get_conn()
+        lines = conn.execute("""
+            SELECT t.name AS item_name, t.unit_of_measure,
+                   tl.quality_level_from, tl.quantity, tl.notes
+            FROM transaction_lines tl
+            JOIN item_types t ON t.id = tl.item_type_id
+            WHERE tl.transaction_id = ?
+            ORDER BY t.name
+        """, (row["id"],)).fetchall()
+
+        sub = QTableWidget(0, 5)
+        sub.setHorizontalHeaderLabels(["STT", "Tên Mặt Hàng", "ĐVT", "Mức HH", "Số Lượng"])
+        sub.verticalHeader().setVisible(False)
+        sub.setShowGrid(False)
+        sub.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        sub.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        sub.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        sub.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sub.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sub.setStyleSheet("""
+            QTableWidget { border: none; background: #efefef; outline: 0; border-radius: 6px; }
+            QHeaderView::section { background: #e8e8e8; color: #777; font-size: 10px;
+                border: none; padding: 4px 8px; }
+            QTableWidget::item { padding: 4px 8px; color: #111; font-size: 12px; border: none; }
+        """)
+        sh = sub.horizontalHeader()
+        F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
+        for i, (mode, w) in enumerate([(F, 44), (S, None), (F, 72), (F, 80), (F, 84)]):
+            sh.setSectionResizeMode(i, mode)
+            if w:
+                sub.setColumnWidth(i, w)
+
+        for i, ln in enumerate(lines):
+            ri = sub.rowCount(); sub.insertRow(ri); sub.setRowHeight(ri, 34)
+            for c, (val, center) in enumerate([
+                (str(i + 1),                          True),
+                (ln["item_name"],                     False),
+                (ln["unit_of_measure"] or "—",        True),
+                (ln["quality_level_from"] or "—",     True),
+                (str(ln["quantity"]),                  True),
+            ]):
+                cell = QTableWidgetItem(val)
+                cell.setFont(QFont(FONT, 11))
+                if center:
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                sub.setItem(ri, c, cell)
+
+        root.addWidget(sub)
+        self._line_count = len(lines)
+
+    def preferred_height(self) -> int:
+        return 160 + max(1, self._line_count) * 34
+
+
 # ── Thin wrappers ─────────────────────────────────────────────────────────────
 
 class ThongKeSharedPage(QWidget):
     """Hàng dùng chung – tồn kho (H1–H3), đang cho mượn, chờ thanh xử lý (H4)."""
 
     _COLS_TON   = ["", "STT", "Tên Hàng", "ĐVT", "H3", "H4"]
-    _COLS_MUON  = ["STT", "Số Phiếu", "Ngày Mượn", "Đơn Vị / Người Mượn", "Tên Hàng", "Số M.Hàng", ""]
+    _COLS_MUON  = ["STT", "Số Phiếu", "Ngày Mượn", "Đơn Vị / Sự Kiện", "Tên Hàng", "Số M.Hàng", ""]
     _COLS_H4    = ["STT", "Số Phiếu", "Ngày", "Kho", "Số M.Hàng", ""]
 
     _TABS = [
@@ -976,8 +1069,10 @@ class ThongKeSharedPage(QWidget):
         self._raw_ton:    list = []
         self._raw_muon:   list = []
         self._raw_h4:     list = []
-        self._h4_rows_order: list = []
-        self._expanded_h4_row: int | None = None
+        self._h4_rows_order:   list = []
+        self._muon_rows_order: list = []
+        self._expanded_h4_row:   int | None = None
+        self._expanded_muon_row: int | None = None
         self._sort: dict[str, tuple[int, bool]] = {
             "ton": (-1, True), "muon": (-1, True), "phieu_h4": (-1, True),
         }
@@ -1192,7 +1287,7 @@ class ThongKeSharedPage(QWidget):
         self._table.setStyleSheet(_TABLE_STYLE)
         self._smart_hdr.sortRequested.connect(self._on_sort)
         self._smart_hdr.visToggled.connect(self._vis_btn.on_vis_toggled)
-        self._table.cellClicked.connect(self._on_h4_cell_clicked)
+        self._table.cellClicked.connect(self._on_cell_clicked)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
         self._table.itemChanged.connect(
@@ -1503,8 +1598,13 @@ class ThongKeSharedPage(QWidget):
                 GROUP BY t.id HAVING (h3 + h4) > 0 ORDER BY t.name
             """, p_ton).fetchall()
         else:  # TONG
-            inv_f = "AND i.warehouse_id = ?" if wh_id else ""
-            p_ton = [wh_id] if wh_id else []
+            if wh_id:
+                inv_f, p_ton = "AND i.warehouse_id = ?", [wh_id]
+            else:
+                # Chỉ tính tồn tại kho TONG; hàng đã xuất cho đơn vị không tính vào đây
+                inv_f, p_ton = (
+                    "AND i.warehouse_id IN (SELECT id FROM warehouses WHERE type='TONG')", []
+                )
             self._raw_ton = conn.execute(f"""
                 SELECT t.id AS item_type_id, t.name AS item_name, t.unit_of_measure,
                        COALESCE(SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END), 0) AS h3,
@@ -1723,16 +1823,22 @@ class ThongKeSharedPage(QWidget):
 
     def _load_muon(self, rows):
         rows = self._sort_rows(rows)
+        self._muon_rows_order = list(rows)
+        self._expanded_muon_row = None
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         n = len(self._COLS_MUON)
         self._setup_cols(self._COLS_MUON, [
             (F, 52), (F, 130), (F, 110), (F, 160), (S, None), (F, 90), (F, 44),
         ], skip={0, n - 1})
-        self._table.setRowCount(0)
+        self._table.clearSpans()
+        self._table.setRowCount(len(rows) * 2)
         for i, r in enumerate(rows):
-            ri = self._table.rowCount()
-            self._table.insertRow(ri)
-            self._table.setRowHeight(ri, 48)
+            dr  = i * 2
+            det = i * 2 + 1
+            self._table.setRowHeight(dr, 48)
+            self._table.setRowHeight(det, 0)
+            self._table.setSpan(det, 0, 1, n)
+
             for c, args in enumerate([
                 (str(i + 1),                         True),
                 (r["reference_number"] or "—",       True),
@@ -1741,7 +1847,7 @@ class ThongKeSharedPage(QWidget):
                 (r["item_names"] or "—",             False),
                 (str(r["line_count"]),               True),
             ]):
-                self._table.setItem(ri, c, self._mk(*args))
+                self._table.setItem(dr, c, self._mk(*args))
 
             tx_id = r["id"]
             btn = QPushButton("•••")
@@ -1755,7 +1861,7 @@ class ThongKeSharedPage(QWidget):
                 QPushButton:hover { background: #f0f0f0; color: #555; }
             """)
             btn.clicked.connect(lambda _, tid=tx_id, b=btn: self._show_muon_menu(tid, b))
-            self._table.setCellWidget(ri, n - 1, btn)
+            self._table.setCellWidget(dr, n - 1, btn)
 
     def _load_phieu_h4(self, rows):
         rows = self._sort_rows(rows)
@@ -1799,35 +1905,47 @@ class ThongKeSharedPage(QWidget):
             btn.clicked.connect(lambda _, tid=tx_id, b=btn: self._show_phieu_h4_menu(tid, b))
             self._table.setCellWidget(dr, n - 1, btn)
 
-    def _on_h4_cell_clicked(self, row: int, col: int):
-        if self._active_tab != "phieu_h4":
+    def _on_cell_clicked(self, row: int, col: int):
+        if self._active_tab == "phieu_h4":
+            self._expand_detail_row(
+                row, col,
+                last_col=len(self._COLS_H4) - 1,
+                rows_order=self._h4_rows_order,
+                expanded_attr="_expanded_h4_row",
+                panel_cls=_H4DetailPanel,
+            )
+        elif self._active_tab == "muon":
+            self._expand_detail_row(
+                row, col,
+                last_col=len(self._COLS_MUON) - 1,
+                rows_order=self._muon_rows_order,
+                expanded_attr="_expanded_muon_row",
+                panel_cls=_MuonDetailPanel,
+            )
+
+    def _expand_detail_row(self, row, col, last_col, rows_order, expanded_attr, panel_cls):
+        if col == last_col:
             return
-        if col == len(self._COLS_H4) - 1:  # "•••" column — let button handle it
-            return
-        if row % 2 == 1:  # detail row
+        if row % 2 == 1:
             return
         det_row = row + 1
-
-        if self._expanded_h4_row == row:
+        expanded = getattr(self, expanded_attr)
+        if expanded == row:
             self._table.setRowHeight(det_row, 0)
             self._table.removeCellWidget(det_row, 0)
-            self._expanded_h4_row = None
+            setattr(self, expanded_attr, None)
             return
-
-        if self._expanded_h4_row is not None:
-            prev_det = self._expanded_h4_row + 1
+        if expanded is not None:
+            prev_det = expanded + 1
             self._table.setRowHeight(prev_det, 0)
             self._table.removeCellWidget(prev_det, 0)
-
         data_idx = row // 2
-        if data_idx >= len(self._h4_rows_order):
+        if data_idx >= len(rows_order):
             return
-        r = self._h4_rows_order[data_idx]
-        panel = _H4DetailPanel(r)
-        h = panel.preferred_height()
+        panel = panel_cls(rows_order[data_idx])
         self._table.setCellWidget(det_row, 0, panel)
-        self._table.setRowHeight(det_row, h)
-        self._expanded_h4_row = row
+        self._table.setRowHeight(det_row, panel.preferred_height())
+        setattr(self, expanded_attr, row)
 
     def _on_table_context_menu(self, pos):
         row = self._table.rowAt(pos.y())
@@ -1842,16 +1960,12 @@ class ThongKeSharedPage(QWidget):
             tx_id = self._h4_rows_order[data_idx]["id"]
             self._show_phieu_h4_menu(tx_id, None)
         elif self._active_tab == "muon":
-            q = self._muon_search.text().strip().lower()
-            visible = [r for r in self._raw_muon
-                       if not q
-                       or q in (r["reference_number"] or "").lower()
-                       or q in (r["borrower"] or "").lower()
-                       or q in (r["transaction_date"] or "")]
-            visible = self._sort_rows(visible)
-            if row >= len(visible):
+            if row % 2 == 1:
                 return
-            self._show_muon_menu(visible[row]["id"], None)
+            data_idx = row // 2
+            if data_idx >= len(self._muon_rows_order):
+                return
+            self._show_muon_menu(self._muon_rows_order[data_idx]["id"], None)
 
     def _show_phieu_h4_menu(self, tx_id: int, anchor):
         menu = QMenu(self)
