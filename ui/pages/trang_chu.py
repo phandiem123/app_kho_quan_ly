@@ -31,37 +31,6 @@ _TABLE_STYLE = """
 
 
 # ── Stat Card ─────────────────────────────────────────────────────────────────
-class StatCard(QWidget):
-    def __init__(self, icon: str, title: str, value: str, color: str = "#111"):
-        super().__init__()
-        self.setStyleSheet(
-            "StatCard { background: white; border: 1px solid #efefef; border-radius: 12px; }"
-        )
-        self.setFixedHeight(82)
-        v = QVBoxLayout(self)
-        v.setContentsMargins(18, 14, 18, 14)
-        v.setSpacing(4)
-
-        # Icon + number on same row
-        top = QHBoxLayout()
-        top.setSpacing(8)
-        top.setContentsMargins(0, 0, 0, 0)
-        ico = QLabel(icon)
-        ico.setFont(QFont(FONT, 15))
-        ico.setStyleSheet("border: none;")
-        top.addWidget(ico)
-        val_lbl = QLabel(str(value))
-        val_lbl.setFont(QFont(FONT, 22, QFont.Weight.Bold))
-        val_lbl.setStyleSheet(f"color: {color}; border: none;")
-        top.addWidget(val_lbl)
-        top.addStretch()
-        v.addLayout(top)
-
-        ttl_lbl = QLabel(title)
-        ttl_lbl.setFont(QFont(FONT, 10))
-        ttl_lbl.setStyleSheet("color: #888; border: none;")
-        v.addWidget(ttl_lbl)
-
 
 # ── Compact read-only table ────────────────────────────────────────────────────
 class _CompactTable(QTableWidget):
@@ -352,11 +321,6 @@ class TrangChuPage(QWidget):
         sv.setContentsMargins(0, 0, 0, 0)
         sv.setSpacing(0)
 
-        self._alert_row = QHBoxLayout()
-        self._alert_row.setSpacing(12)
-        sv.addLayout(self._alert_row)
-        sv.addSpacing(16)
-
         lists_row = QHBoxLayout()
         lists_row.setSpacing(20)
 
@@ -463,40 +427,6 @@ class TrangChuPage(QWidget):
     def refresh(self):
         conn = database.get_conn()
 
-        # ── Alert cards ────────────────────────────────────────────────
-        while self._alert_row.count():
-            item = self._alert_row.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        dc_qty = conn.execute("""
-            SELECT COALESCE(SUM(i.quantity), 0) AS qty
-            FROM inventory i
-            JOIN warehouses w ON w.id = i.warehouse_id
-            WHERE i.is_shared = 1 AND w.type = 'DON_VI' AND i.quantity > 0
-        """).fetchone()["qty"] or 0
-
-        h4_returned = conn.execute("""
-            SELECT COALESCE(SUM(tl.quantity), 0) AS qty
-            FROM transactions tx
-            JOIN transaction_lines tl ON tl.transaction_id = tx.id
-            WHERE tx.type = 'NHAP_KHO'
-              AND tx.from_warehouse_id IS NOT NULL
-              AND tl.quality_level_to = 'H4'
-              AND tx.transaction_date >= date('now', '-30 days')
-        """).fetchone()["qty"] or 0
-
-        txl_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM transactions WHERE type = 'THANH_XU_LY'"
-        ).fetchone()["cnt"] or 0
-
-        for icon, title, value, color in [
-            ("🔄", "Hàng Dùng Chung Đang Cho Mượn",    dc_qty,      "#e65100" if dc_qty > 0 else "#111"),
-            ("↩",  "H4 Từ ĐV Trả Về (30 Ngày)", h4_returned, "#111"),
-            ("📋", "Phiếu TXL",                  txl_count,   "#d32f2f" if txl_count > 0 else "#111"),
-        ]:
-            self._alert_row.addWidget(StatCard(icon, title, value, color))
-        self._alert_row.addStretch()
 
         # ── Bảng: Đơn Vị Chưa Trả Hàng DC ───────────────────────────────────
         borrow_rows = conn.execute("""
