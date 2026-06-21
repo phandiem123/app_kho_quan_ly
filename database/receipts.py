@@ -242,9 +242,9 @@ def insert(receipt: Receipt) -> int:
         elif subtype == "shared_from_wh" and receipt.from_warehouse_id:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=0
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=1
             """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql_from))
-            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H3", line.quantity, is_shared=1)
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, ql_from, line.quantity, is_shared=1)
 
     conn.commit()
     return tx_id
@@ -285,11 +285,12 @@ def update(receipt: Receipt) -> None:
                     WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
                 """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
             elif old_subtype == "shared_from_wh" and old["from_warehouse_id"]:
+                restore_ql = line.quality_level_from or "H3"
                 conn.execute("""
                     UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                    WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
-                """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
-                _upsert_inv(conn, old["from_warehouse_id"], line.item_type_id, "H1", line.quantity, is_shared=0)
+                    WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=1
+                """, (line.quantity, old["to_warehouse_id"], line.item_type_id, restore_ql))
+                _upsert_inv(conn, old["from_warehouse_id"], line.item_type_id, restore_ql, line.quantity, is_shared=1)
 
     subtype = receipt.subtype
     conn.execute("""
@@ -343,9 +344,9 @@ def update(receipt: Receipt) -> None:
         elif subtype == "shared_from_wh" and receipt.from_warehouse_id:
             conn.execute("""
                 UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=0
+                WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=1
             """, (line.quantity, receipt.from_warehouse_id, line.item_type_id, ql_from))
-            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, "H3", line.quantity, is_shared=1)
+            _upsert_inv(conn, receipt.to_warehouse_id, line.item_type_id, ql_from, line.quantity, is_shared=1)
     conn.commit()
 
 
@@ -383,12 +384,12 @@ def delete(receipt_id: int) -> None:
                     WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
                 """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
             elif subtype == "shared_from_wh" and old["from_warehouse_id"]:
+                restore_ql = line.quality_level_from or "H3"
                 conn.execute("""
                     UPDATE inventory SET quantity = MAX(0, quantity - ?)
-                    WHERE warehouse_id=? AND item_type_id=? AND is_shared=1
-                """, (line.quantity, old["to_warehouse_id"], line.item_type_id))
-                restore_ql = line.quality_level_from or "H1"
-                _upsert_inv(conn, old["from_warehouse_id"], line.item_type_id, restore_ql, line.quantity, is_shared=0)
+                    WHERE warehouse_id=? AND item_type_id=? AND quality_level=? AND is_shared=1
+                """, (line.quantity, old["to_warehouse_id"], line.item_type_id, restore_ql))
+                _upsert_inv(conn, old["from_warehouse_id"], line.item_type_id, restore_ql, line.quantity, is_shared=1)
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (receipt_id,))
     conn.execute("DELETE FROM transactions WHERE id=?", (receipt_id,))
     conn.commit()

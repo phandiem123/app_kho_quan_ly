@@ -733,7 +733,7 @@ class NhapKhoFormDialog(QDialog):
 
         if receipt:
             self._fill(receipt)
-        elif not self._is_return_mode:
+        elif not self._is_return_mode and self._subtype != "shared_from_wh":
             self._add_line()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -887,7 +887,7 @@ class NhapKhoFormDialog(QDialog):
             SELECT it.id, i.quality_level, SUM(i.quantity) AS qty
             FROM inventory i
             JOIN item_types it ON it.id = i.item_type_id
-            WHERE i.warehouse_id=? AND i.is_shared=0 AND i.quantity > 0
+            WHERE i.warehouse_id=? AND i.is_shared=1 AND i.quantity > 0
             GROUP BY it.id, i.quality_level HAVING qty > 0
             ORDER BY it.name, i.quality_level
         """, (wh_id,)).fetchall()
@@ -939,6 +939,18 @@ class NhapKhoFormDialog(QDialog):
     def _add_line(self, line: ReceiptLine | None = None):
         if self._subtype == "from_unit" and not line and not self._unit_item_types:
             return  # chưa chọn đơn vị → không thêm row trống
+        _is_wh_src = (
+            self._subtype == "shared_from_wh" or
+            (self._subtype == "shared_return" and self._shared_source == "warehouse")
+        )
+        if _is_wh_src and not line and not self._loan_item_types_filtered:
+            if not self.f_src_wh.currentData():
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    self, "Chọn Kho Nguồn",
+                    "Vui lòng chọn Kho Nguồn trước khi thêm mặt hàng."
+                )
+            return
         if self._subtype == "from_unit":
             item_types = self._unit_item_types if self._unit_item_types else self._item_types
         elif self._subtype == "shared_from_wh" and self._loan_item_types_filtered:
