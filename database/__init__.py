@@ -40,6 +40,17 @@ def _migrate():
             pass
     _conn.commit()
     _migrate_nhap_dc_tu_kho()
+    _migrate_fix_loan_fk()
+
+
+def _migrate_fix_loan_fk():
+    """Fix databases where transactions table has broken REFERENCES transactions_new(id)."""
+    row = _conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='transactions'"
+    ).fetchone()
+    if not row or 'transactions_new' not in (row[0] or ''):
+        return
+    _rebuild_transactions_table()
 
 
 def _migrate_nhap_dc_tu_kho():
@@ -49,7 +60,11 @@ def _migrate_nhap_dc_tu_kho():
     ).fetchone()
     if not row or 'NHAP_DC_TU_KHO' in (row[0] or ''):
         return  # Already has it or table doesn't exist
+    _rebuild_transactions_table()
 
+
+def _rebuild_transactions_table():
+    """Recreate transactions table with correct schema (correct self-referencing FK)."""
     _conn.execute("PRAGMA foreign_keys = OFF")
     _conn.execute("""
         CREATE TABLE transactions_new (
@@ -71,7 +86,7 @@ def _migrate_nhap_dc_tu_kho():
             created_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
             supplier            TEXT,
             transporter         TEXT,
-            loan_transaction_id INTEGER REFERENCES transactions_new(id)
+            loan_transaction_id INTEGER REFERENCES transactions(id)
         )
     """)
     _conn.execute("""

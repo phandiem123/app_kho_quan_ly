@@ -1,12 +1,15 @@
 """Trang Export / Import dữ liệu."""
 
 from __future__ import annotations
+import shutil
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QFileDialog, QMessageBox, QSizePolicy, QInputDialog,
+    QDialog, QRadioButton, QButtonGroup, QListWidget, QListWidgetItem, QComboBox,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QCursor
 import database
 
 FONT = "Segoe UI"
@@ -103,6 +106,192 @@ class _Card(QFrame):
         v.addLayout(row)
 
 
+class _ExportScopeDialog(QDialog):
+    """Dialog chọn phạm vi xuất: tất cả kho, tất cả ĐV, kho cụ thể, ĐV cụ thể.
+    Kết quả: (scope, wh_ids, year)
+      scope   – "ALL_KHO" | "ALL_DV" | "KHO_SEL" | "DV_SEL"
+      wh_ids  – list[int], rỗng nếu scope là ALL_*
+      year    – int | None (chỉ dùng cho báo cáo năm)
+    """
+
+    _SCOPES = [
+        ("ALL_KHO", "Tất cả kho tổng"),
+        ("ALL_DV",  "Tất cả đơn vị"),
+        ("KHO_SEL", "Kho tổng cụ thể"),
+        ("DV_SEL",  "Đơn vị cụ thể"),
+    ]
+
+    def __init__(self, conn, title="Chọn Phạm Vi Xuất", with_year=False, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(400)
+        self.setStyleSheet("background: white;")
+        self._conn      = conn
+        self._with_year = with_year
+        self._result    = None
+
+        self._kho_rows = conn.execute(
+            "SELECT id, code, name FROM warehouses WHERE type='TONG' AND is_active=1 ORDER BY name"
+        ).fetchall()
+        self._dv_rows = conn.execute(
+            "SELECT id, code, name FROM warehouses WHERE type='DON_VI' AND is_active=1 ORDER BY name"
+        ).fetchall()
+        if with_year:
+            self._years = [r["year"] for r in conn.execute(
+                "SELECT DISTINCT year FROM annual_snapshots ORDER BY year DESC"
+            ).fetchall()]
+        else:
+            self._years = []
+
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(14)
+
+        # ── Năm báo cáo (optional) ─────────────────────────────────────────────
+        if self._with_year:
+            yr_row = QHBoxLayout()
+            yr_lbl = QLabel("Năm báo cáo:")
+            yr_lbl.setFont(QFont(FONT, 11))
+            yr_lbl.setStyleSheet("color: #444;")
+            yr_row.addWidget(yr_lbl)
+            self._yr_combo = QComboBox()
+            self._yr_combo.setFont(QFont(FONT, 11))
+            self._yr_combo.setStyleSheet(
+                "QComboBox { border: 1px solid #e0e0e0; border-radius: 6px;"
+                " padding: 2px 28px 2px 8px; background: white; color: #111; }"
+            )
+            self._yr_combo.addItem("Tất cả năm", None)
+            for y in self._years:
+                self._yr_combo.addItem(str(y), y)
+            if self._years:
+                self._yr_combo.setCurrentIndex(1)
+            yr_row.addWidget(self._yr_combo, 1)
+            root.addLayout(yr_row)
+
+            sep = QFrame()
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setStyleSheet("color: #efefef;")
+            root.addWidget(sep)
+
+        # ── Phạm vi ────────────────────────────────────────────────────────────
+        scope_lbl = QLabel("Phạm vi xuất:")
+        scope_lbl.setFont(QFont(FONT, 11, QFont.Weight.Bold))
+        scope_lbl.setStyleSheet("color: #111;")
+        root.addWidget(scope_lbl)
+
+        self._btn_grp = QButtonGroup(self)
+        self._radios: dict[str, QRadioButton] = {}
+        for key, label in self._SCOPES:
+            rb = QRadioButton(label)
+            rb.setFont(QFont(FONT, 11))
+            rb.setStyleSheet("QRadioButton { color: #111; background: transparent; }")
+            self._btn_grp.addButton(rb)
+            self._radios[key] = rb
+            root.addWidget(rb)
+            rb.toggled.connect(lambda _, k=key: self._on_scope_changed())
+        self._radios["ALL_KHO"].setChecked(True)
+
+        # ── Danh sách kho/ĐV cụ thể ────────────────────────────────────────────
+        self._list_lbl = QLabel("Chọn (giữ Ctrl để chọn nhiều):")
+        self._list_lbl.setFont(QFont(FONT, 10))
+        self._list_lbl.setStyleSheet("color: #888;")
+        self._list_lbl.setVisible(False)
+        root.addWidget(self._list_lbl)
+
+        self._list = QListWidget()
+        self._list.setFont(QFont(FONT, 11))
+        self._list.setMinimumHeight(140)
+        self._list.setMaximumHeight(220)
+        self._list.setStyleSheet("""
+            QListWidget { border: 1px solid #e0e0e0; border-radius: 6px; background: white; }
+            QListWidget::item { padding: 5px 10px; }
+            QListWidget::item:checked   { background: #e8f0ff; color: #111; }
+            QListWidget::item:unchecked { color: #111; }
+        """)
+        self._list.setVisible(False)
+        root.addWidget(self._list)
+
+        # ── Buttons ─────────────────────────────────────────────────────────────
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet("color: #efefef;")
+        root.addWidget(sep2)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        cancel = QPushButton("Hủy")
+        cancel.setFixedHeight(38)
+        cancel.setFont(QFont(FONT, 11))
+        cancel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        cancel.setStyleSheet(
+            "QPushButton { border: 1px solid #e0e0e0; border-radius: 8px;"
+            " background: white; color: #555; }"
+            " QPushButton:hover { background: #f5f5f5; }"
+        )
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("Xuất Excel")
+        ok.setFixedHeight(38)
+        ok.setFont(QFont(FONT, 11, QFont.Weight.Bold))
+        ok.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        ok.setStyleSheet(
+            "QPushButton { border: none; border-radius: 8px;"
+            " background: #111; color: white; }"
+            " QPushButton:hover { background: #333; }"
+        )
+        ok.clicked.connect(self._on_ok)
+        btn_row.addWidget(cancel)
+        btn_row.addWidget(ok)
+        root.addLayout(btn_row)
+
+    def _on_scope_changed(self):
+        if not hasattr(self, '_list'):
+            return
+        scope = self._current_scope()
+        show = scope in ("KHO_SEL", "DV_SEL")
+        self._list_lbl.setVisible(show)
+        self._list.setVisible(show)
+        if show:
+            rows = self._kho_rows if scope == "KHO_SEL" else self._dv_rows
+            self._list.clear()
+            for r in rows:
+                item = QListWidgetItem(f"{r['code']} – {r['name']}")
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Unchecked)
+                item.setData(Qt.ItemDataRole.UserRole, r["id"])
+                self._list.addItem(item)
+        self.adjustSize()
+
+    def _current_scope(self) -> str:
+        for key, rb in self._radios.items():
+            if rb.isChecked():
+                return key
+        return "ALL_KHO"
+
+    def _on_ok(self):
+        scope = self._current_scope()
+        wh_ids = []
+        if scope in ("KHO_SEL", "DV_SEL"):
+            for i in range(self._list.count()):
+                item = self._list.item(i)
+                if item.checkState() == Qt.CheckState.Checked:
+                    wh_ids.append(item.data(Qt.ItemDataRole.UserRole))
+            if not wh_ids:
+                QMessageBox.warning(self, "Chưa chọn", "Vui lòng chọn ít nhất một kho / đơn vị.")
+                return
+        year = None
+        if self._with_year and hasattr(self, "_yr_combo"):
+            year = self._yr_combo.currentData()
+        self._result = (scope, wh_ids, year)
+        self.accept()
+
+    def get_result(self):
+        return self._result
+
+
 class ExportImportPage(QWidget):
     def __init__(self):
         super().__init__()
@@ -123,73 +312,39 @@ class ExportImportPage(QWidget):
         # ── Xuất dữ liệu ──────────────────────────────────────────────────────
         v.addWidget(_section_header("XUẤT DỮ LIỆU"))
 
-        export_row2 = QHBoxLayout()
-        export_row2.setSpacing(16)
-        export_row2.addWidget(_Card(
-            "Tổng Hàng Tại Kho",
-            "Xuất tổng hợp tồn kho (H1-H4, giá trị) tại các kho tổng, nhóm theo mặt hàng.",
-            "Xuất Excel", self._export_inv_kho,
+        export_row_a = QHBoxLayout()
+        export_row_a.setSpacing(16)
+        export_row_a.addWidget(_Card(
+            "Tổng Hàng",
+            "Xuất tổng hợp tồn kho (H1-H4) theo kho tổng hoặc đơn vị, nhóm theo mặt hàng. "
+            "Có thể chọn tất cả hoặc từng kho/đơn vị cụ thể.",
+            "Xuất Excel", self._export_tong_hang,
         ))
-        export_row2.addWidget(_Card(
-            "Tổng Hàng Tại Đơn Vị",
-            "Xuất tổng hợp tồn kho (H1-H4, thâm niên) tại tất cả đơn vị, nhóm theo mặt hàng.",
-            "Xuất Excel", self._export_inv_donvi,
-        ))
-        export_row2.addWidget(_Card(
+        export_row_a.addWidget(_Card(
             "Hàng Dùng Chung",
-            "Xuất danh sách hàng dùng chung hiện tồn tại kho (H1-H4, đơn giá, giá trị).",
-            "Xuất Excel", self._export_shared,
+            "Xuất danh sách hàng dùng chung (H1-H4, đơn giá, giá trị). "
+            "Có thể chọn tất cả kho tổng, tất cả đơn vị, hoặc từng kho/đơn vị cụ thể.",
+            "Xuất Excel", self._export_shared_scope,
         ))
-        v.addLayout(export_row2)
+        export_row_a.addWidget(_Card(
+            "Hàng H4",
+            "Xuất danh sách hàng H4 đang tồn (kèm thâm niên với đơn vị). "
+            "Có thể chọn tất cả kho tổng, tất cả đơn vị, hoặc từng kho/đơn vị cụ thể.",
+            "Xuất Excel", self._export_h4_scope,
+        ))
+        v.addLayout(export_row_a)
 
-        export_row3 = QHBoxLayout()
-        export_row3.setSpacing(16)
-        export_row3.addWidget(_Card(
-            "H4 Tại Kho",
-            "Xuất danh sách hàng H4 đang tồn tại các kho tổng (không kèm giá).",
-            "Xuất Excel", self._export_h4_kho,
+        export_row_b = QHBoxLayout()
+        export_row_b.setSpacing(16)
+        export_row_b.addWidget(_Card(
+            "Báo Cáo Năm",
+            "Xuất báo cáo năm (đầu năm, nhập, xuất, cuối năm). "
+            "Chọn năm cụ thể hoặc tất cả năm; chọn phạm vi kho tổng hoặc đơn vị.",
+            "Xuất Excel", self._export_annual_scope,
         ))
-        export_row3.addWidget(_Card(
-            "H4 Tại Đơn Vị (Chọn)",
-            "Chọn một đơn vị, xuất danh sách hàng H4 đang tồn tại đó.",
-            "Xuất Excel", self._export_h4_donvi_sel,
-        ))
-        export_row3.addWidget(_Card(
-            "Tổng H4 Tất Cả Đơn Vị",
-            "Xuất tổng hợp hàng H4 tại tất cả đơn vị (kèm thâm niên, không kèm giá).",
-            "Xuất Excel", self._export_h4_all_donvi,
-        ))
-        v.addLayout(export_row3)
-
-        export_row4 = QHBoxLayout()
-        export_row4.setSpacing(16)
-        export_row4.addWidget(_Card(
-            "Báo Cáo Năm – Kho Được Chọn",
-            "Chọn kho và năm, xuất báo cáo tồn kho theo năm (đầu năm, nhập, xuất, cuối năm).",
-            "Xuất Excel", self._export_annual_kho_sel,
-        ))
-        export_row4.addWidget(_Card(
-            "Báo Cáo Năm – ĐV Được Chọn",
-            "Chọn đơn vị và năm, xuất báo cáo tồn kho theo năm tại đơn vị đó.",
-            "Xuất Excel", self._export_annual_dv_sel,
-        ))
-        export_row4.addStretch()
-        v.addLayout(export_row4)
-
-        export_row5 = QHBoxLayout()
-        export_row5.setSpacing(16)
-        export_row5.addWidget(_Card(
-            "Báo Cáo Năm – Tất Cả Kho",
-            "Xuất báo cáo năm của toàn bộ kho tổng (mọi năm đã lưu snapshot).",
-            "Xuất Excel", self._export_annual_all_kho,
-        ))
-        export_row5.addWidget(_Card(
-            "Báo Cáo Năm – Tất Cả Đơn Vị",
-            "Xuất báo cáo năm của toàn bộ đơn vị (mọi năm đã lưu snapshot).",
-            "Xuất Excel", self._export_annual_all_dv,
-        ))
-        export_row5.addStretch()
-        v.addLayout(export_row5)
+        export_row_b.addStretch()
+        export_row_b.addStretch()
+        v.addLayout(export_row_b)
 
         # ── Nhập dữ liệu ──────────────────────────────────────────────────────
         v.addWidget(_section_header("NHẬP DỮ LIỆU"))
@@ -251,7 +406,310 @@ class ExportImportPage(QWidget):
         import_row3.addStretch()
         v.addLayout(import_row3)
 
+        # ── Sao lưu & Phục hồi ───────────────────────────────────────────────
+        v.addWidget(_section_header("SAO LƯU & PHỤC HỒI"))
+
+        backup_row = QHBoxLayout()
+        backup_row.setSpacing(16)
+        backup_row.addWidget(_Card(
+            "Sao Lưu Database",
+            "Lưu toàn bộ dữ liệu (kho, mặt hàng, tồn kho, lịch sử giao dịch) ra file .db để chuyển sang máy khác hoặc lưu dự phòng.",
+            "Sao Lưu", self._backup_db,
+        ))
+        backup_row.addWidget(_Card(
+            "Phục Hồi Database",
+            "Khôi phục dữ liệu từ file .db đã sao lưu trước đó. Toàn bộ dữ liệu hiện tại sẽ bị thay thế.",
+            "Phục Hồi", self._restore_db,
+        ))
+        backup_row.addStretch()
+        v.addLayout(backup_row)
+
         v.addStretch()
+
+    # ── Export (scope-based) ─────────────────────────────────────────────────
+
+    def _scope_wh_filter(self, scope: str, wh_ids: list[int]) -> tuple[str, list]:
+        """Return (WHERE fragment, params) for warehouse filtering."""
+        if scope == "ALL_KHO":
+            return "w.type = 'TONG'", []
+        if scope == "ALL_DV":
+            return "w.type = 'DON_VI'", []
+        ph = ",".join("?" * len(wh_ids))
+        return f"w.id IN ({ph})", list(wh_ids)
+
+    def _export_tong_hang(self):
+        if not _check_openpyxl(self):
+            return
+        conn = database.get_conn()
+        dlg = _ExportScopeDialog(conn, "Xuất Tổng Hàng", parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        scope, wh_ids, _ = dlg.get_result()
+        is_kho = scope in ("ALL_KHO", "KHO_SEL")
+        wh_f, params = self._scope_wh_filter(scope, wh_ids)
+
+        default = "tong_hang_tai_kho.xlsx" if is_kho else "tong_hang_tai_don_vi.xlsx"
+        path, _ = QFileDialog.getSaveFileName(self, "Xuất Tổng Hàng", default, "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            import openpyxl
+            if is_kho:
+                rows = conn.execute(f"""
+                    SELECT w.code AS wh_code, w.name AS wh_name,
+                           t.code AS item_code, t.name AS item_name, t.unit_of_measure,
+                           ROUND(t.total_lifespan_months / 12.0, 1) AS lifespan_years,
+                           t.unit_price,
+                           SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
+                           SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
+                           SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                           SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
+                           SUM(i.quantity) AS total
+                    FROM inventory i
+                    JOIN warehouses w ON w.id = i.warehouse_id
+                    JOIN item_types t  ON t.id = i.item_type_id
+                    WHERE {wh_f} AND i.is_shared = 0 AND i.quantity > 0
+                    GROUP BY w.id, t.id
+                    ORDER BY w.name, t.name
+                """, params).fetchall()
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Tổng Hàng Tại Kho"
+                _write_header(ws, [
+                    "Tên Kho", "Tên Hàng", "ĐVT",
+                    "Niên Hạn (Năm)", "Đơn Giá", "H1", "H2", "H3", "H4", "Tổng", "Giá Trị H1",
+                ])
+                for r in rows:
+                    price = float(r["unit_price"] or 0)
+                    ws.append([
+                        r["wh_name"], r["item_name"],
+                        r["unit_of_measure"], r["lifespan_years"], price,
+                        r["h1"], r["h2"], r["h3"], r["h4"], r["total"],
+                        r["h1"] * price,
+                    ])
+            else:
+                rows = conn.execute(f"""
+                    SELECT w.name AS wh_name,
+                           t.name AS item_name, t.unit_of_measure,
+                           t.total_lifespan_months,
+                           MAX(CAST((julianday('now') - julianday(i.received_at_unit_date)) / 30.44 AS INTEGER)) AS months_at_unit,
+                           SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
+                           SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
+                           SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                           SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
+                           SUM(i.quantity) AS total
+                    FROM inventory i
+                    JOIN warehouses w ON w.id = i.warehouse_id
+                    JOIN item_types t  ON t.id = i.item_type_id
+                    WHERE {wh_f} AND i.quantity > 0
+                    GROUP BY w.id, t.id
+                    ORDER BY w.name, t.name
+                """, params).fetchall()
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Tổng Hàng Tại ĐV"
+                _write_header(ws, [
+                    "Tên ĐV", "Tên Hàng", "ĐVT",
+                    "Tại ĐV (tháng)", "Còn Lại (tháng)", "H1", "H2", "H3", "H4", "Tổng",
+                ])
+                for r in rows:
+                    mm = r["months_at_unit"] or 0
+                    remaining = max(0, (r["total_lifespan_months"] or 0) - mm)
+                    ws.append([
+                        r["wh_name"], r["item_name"],
+                        r["unit_of_measure"], mm, remaining,
+                        r["h1"], r["h2"], r["h3"], r["h4"], r["total"],
+                    ])
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _export_shared_scope(self):
+        if not _check_openpyxl(self):
+            return
+        conn = database.get_conn()
+        dlg = _ExportScopeDialog(conn, "Xuất Hàng Dùng Chung", parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        scope, wh_ids, _ = dlg.get_result()
+        is_kho = scope in ("ALL_KHO", "KHO_SEL")
+        wh_f, params = self._scope_wh_filter(scope, wh_ids)
+
+        default = "hang_dung_chung_kho.xlsx" if is_kho else "hang_dung_chung_dv.xlsx"
+        path, _ = QFileDialog.getSaveFileName(self, "Xuất Hàng Dùng Chung", default, "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            import openpyxl
+            rows = conn.execute(f"""
+                SELECT w.code AS wh_code, w.name AS wh_name,
+                       t.code AS item_code, t.name AS item_name, t.unit_of_measure, t.unit_price,
+                       SUM(CASE WHEN i.quality_level='H1' THEN i.quantity ELSE 0 END) AS h1,
+                       SUM(CASE WHEN i.quality_level='H2' THEN i.quantity ELSE 0 END) AS h2,
+                       SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
+                       SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4,
+                       SUM(i.quantity) AS total
+                FROM inventory i
+                JOIN warehouses w ON w.id = i.warehouse_id
+                JOIN item_types t  ON t.id = i.item_type_id
+                WHERE i.is_shared = 1 AND {wh_f} AND i.quantity > 0
+                GROUP BY w.id, t.id
+                ORDER BY w.name, t.name
+            """, params).fetchall()
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Hàng Dùng Chung"
+            _write_header(ws, [
+                "Tên Kho/ĐV", "Tên Hàng", "ĐVT", "Đơn Giá",
+                "H1", "H2", "H3", "H4", "Tổng", "Giá Trị H1",
+            ])
+            for r in rows:
+                price = float(r["unit_price"] or 0)
+                ws.append([
+                    r["wh_name"], r["item_name"],
+                    r["unit_of_measure"], price,
+                    r["h1"], r["h2"], r["h3"], r["h4"], r["total"],
+                    r["h1"] * price,
+                ])
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _export_h4_scope(self):
+        if not _check_openpyxl(self):
+            return
+        conn = database.get_conn()
+        dlg = _ExportScopeDialog(conn, "Xuất Hàng H4", parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        scope, wh_ids, _ = dlg.get_result()
+        is_kho = scope in ("ALL_KHO", "KHO_SEL")
+        wh_f, params = self._scope_wh_filter(scope, wh_ids)
+
+        default = "h4_tai_kho.xlsx" if is_kho else "h4_tai_don_vi.xlsx"
+        path, _ = QFileDialog.getSaveFileName(self, "Xuất Hàng H4", default, "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            import openpyxl
+            if is_kho:
+                rows = conn.execute(f"""
+                    SELECT w.code AS wh_code, w.name AS wh_name,
+                           t.code AS item_code, t.name AS item_name, t.unit_of_measure,
+                           SUM(i.quantity) AS quantity
+                    FROM inventory i
+                    JOIN warehouses w ON w.id = i.warehouse_id
+                    JOIN item_types t  ON t.id = i.item_type_id
+                    WHERE i.quality_level = 'H4' AND i.is_shared = 0
+                      AND {wh_f} AND i.quantity > 0
+                    GROUP BY w.id, t.id
+                    ORDER BY w.name, t.name
+                """, params).fetchall()
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "H4 Tại Kho"
+                _write_header(ws, ["Tên Kho", "Tên Hàng", "ĐVT", "Số Lượng"])
+                for r in rows:
+                    ws.append([r["wh_name"], r["item_name"],
+                               r["unit_of_measure"], r["quantity"]])
+            else:
+                rows = conn.execute(f"""
+                    SELECT w.name AS wh_name,
+                           t.name AS item_name, t.unit_of_measure,
+                           MAX(CAST((julianday('now') - julianday(i.received_at_unit_date)) / 30.44 AS INTEGER)) AS months_at_unit,
+                           SUM(i.quantity) AS quantity
+                    FROM inventory i
+                    JOIN warehouses w ON w.id = i.warehouse_id
+                    JOIN item_types t  ON t.id = i.item_type_id
+                    WHERE i.quality_level = 'H4' AND {wh_f} AND i.quantity > 0
+                    GROUP BY w.id, t.id
+                    ORDER BY w.name, t.name
+                """, params).fetchall()
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "H4 Tại ĐV"
+                _write_header(ws, ["Tên ĐV", "Tên Hàng", "ĐVT",
+                                   "Tại ĐV (tháng)", "Số Lượng"])
+                for r in rows:
+                    ws.append([r["wh_name"], r["item_name"],
+                               r["unit_of_measure"], r["months_at_unit"] or 0, r["quantity"]])
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+    def _export_annual_scope(self):
+        if not _check_openpyxl(self):
+            return
+        conn = database.get_conn()
+        dlg = _ExportScopeDialog(conn, "Xuất Báo Cáo Năm", with_year=True, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        scope, wh_ids, year = dlg.get_result()
+        is_kho = scope in ("ALL_KHO", "KHO_SEL")
+        wh_f, params = self._scope_wh_filter(scope, wh_ids)
+
+        yr_label = str(year) if year else "tat_ca_nam"
+        scope_label = {"ALL_KHO": "tat_ca_kho", "ALL_DV": "tat_ca_dv",
+                       "KHO_SEL": "kho_chon", "DV_SEL": "dv_chon"}[scope]
+        default = f"bc_nam_{scope_label}_{yr_label}.xlsx"
+        path, _ = QFileDialog.getSaveFileName(self, "Xuất Báo Cáo Năm", default, "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            import openpyxl
+            year_filter = ""
+            if year is not None:
+                year_filter = " AND s.year = ?"
+                params = list(params) + [year]
+            rows = conn.execute(f"""
+                SELECT s.year, w.code AS wh_code, w.name AS wh_name,
+                       t.code AS item_code, t.name AS item_name, t.unit_of_measure,
+                       t.total_lifespan_months, t.unit_price,
+                       s.h1_qty, s.h2_qty, s.h3_qty, s.h4_qty,
+                       s.imported_qty, s.exported_qty, s.upgraded_qty, s.disposed_qty
+                FROM annual_snapshots s
+                JOIN warehouses w ON w.id = s.warehouse_id
+                JOIN item_types t  ON t.id = s.item_type_id
+                WHERE {wh_f}{year_filter}
+                ORDER BY s.year DESC, w.name, t.name
+            """, params).fetchall()
+            if not rows:
+                QMessageBox.information(self, "Thông báo", "Không có dữ liệu báo cáo năm cho lựa chọn này.")
+                return
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Báo Cáo Năm"
+            headers = ["Năm", "Tên Kho/ĐV", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)"]
+            if is_kho:
+                headers.append("Đơn Giá")
+            headers += ["H1 Cuối Năm", "H2 Cuối Năm", "H3 Cuối Năm", "H4 Cuối Năm",
+                        "Tổng Cuối Năm", "Nhập Năm", "Xuất Năm", "Nâng Mức", "TXL"]
+            _write_header(ws, headers)
+            for r in rows:
+                total = r["h1_qty"] + r["h2_qty"] + r["h3_qty"] + r["h4_qty"]
+                row_data = [
+                    r["year"], r["wh_name"],
+                    r["item_name"], r["unit_of_measure"],
+                    round(r["total_lifespan_months"] / 12.0, 1),
+                ]
+                if is_kho:
+                    row_data.append(float(r["unit_price"] or 0))
+                row_data += [
+                    r["h1_qty"], r["h2_qty"], r["h3_qty"], r["h4_qty"], total,
+                    r["imported_qty"], r["exported_qty"], r["upgraded_qty"], r["disposed_qty"],
+                ]
+                ws.append(row_data)
+            _auto_width(ws)
+            wb.save(path)
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất {len(rows)} dòng.\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
 
     # ── Export ────────────────────────────────────────────────────────────────
 
@@ -286,8 +744,8 @@ class ExportImportPage(QWidget):
             ws.title = "Tồn Kho"
 
             headers = [
-                "Mã Kho", "Tên Kho", "Loại Kho",
-                "Mã Hàng", "Tên Hàng", "ĐVT",
+                "Tên Kho", "Loại Kho",
+                "Tên Hàng", "ĐVT",
                 "Mức HH", "Số Lượng",
                 "Ngày Nhập ĐV", "Ngày SX", "Số Lô",
                 "Dùng Chung", "Ghi Chú",
@@ -296,9 +754,9 @@ class ExportImportPage(QWidget):
 
             for r in rows:
                 ws.append([
-                    r["wh_code"], r["wh_name"],
+                    r["wh_name"],
                     "Kho Tổng" if r["wh_type"] == "TONG" else "Đơn Vị",
-                    r["item_code"], r["item_name"], r["unit_of_measure"],
+                    r["item_name"], r["unit_of_measure"],
                     r["quality_level"], r["quantity"],
                     r["received_at_unit_date"] or "",
                     r["manufacture_date"] or "",
@@ -426,13 +884,13 @@ class ExportImportPage(QWidget):
             ws = wb.active
             ws.title = "Tổng Hàng Tại Kho"
             _write_header(ws, [
-                "Mã Kho", "Tên Kho", "Mã Hàng", "Tên Hàng", "ĐVT",
+                "Tên Kho", "Tên Hàng", "ĐVT",
                 "Niên Hạn (Năm)", "Đơn Giá", "H1", "H2", "H3", "H4", "Tổng", "Giá Trị H1",
             ])
             for r in rows:
                 price = float(r["unit_price"] or 0)
                 ws.append([
-                    r["wh_code"], r["wh_name"], r["item_code"], r["item_name"],
+                    r["wh_name"], r["item_name"],
                     r["unit_of_measure"], r["lifespan_years"], price,
                     r["h1"], r["h2"], r["h3"], r["h4"], r["total"],
                     r["h1"] * price,
@@ -475,14 +933,14 @@ class ExportImportPage(QWidget):
             ws = wb.active
             ws.title = "Tổng Hàng Tại ĐV"
             _write_header(ws, [
-                "Mã ĐV", "Tên ĐV", "Mã Hàng", "Tên Hàng", "ĐVT",
+                "Tên ĐV", "Tên Hàng", "ĐVT",
                 "Tại ĐV (tháng)", "Còn Lại (tháng)", "H1", "H2", "H3", "H4", "Tổng",
             ])
             for r in rows:
                 mm = r["months_at_unit"] or 0
                 remaining = max(0, (r["total_lifespan_months"] or 0) - mm)
                 ws.append([
-                    r["wh_code"], r["wh_name"], r["item_code"], r["item_name"],
+                    r["wh_name"], r["item_name"],
                     r["unit_of_measure"], mm, remaining,
                     r["h1"], r["h2"], r["h3"], r["h4"], r["total"],
                 ])
@@ -522,13 +980,13 @@ class ExportImportPage(QWidget):
             ws = wb.active
             ws.title = "Hàng Dùng Chung"
             _write_header(ws, [
-                "Mã Kho", "Tên Kho", "Mã Hàng", "Tên Hàng", "ĐVT", "Đơn Giá",
+                "Tên Kho", "Tên Hàng", "ĐVT", "Đơn Giá",
                 "H1", "H2", "H3", "H4", "Tổng", "Giá Trị H1",
             ])
             for r in rows:
                 price = float(r["unit_price"] or 0)
                 ws.append([
-                    r["wh_code"], r["wh_name"], r["item_code"], r["item_name"],
+                    r["wh_name"], r["item_name"],
                     r["unit_of_measure"], price,
                     r["h1"], r["h2"], r["h3"], r["h4"], r["total"],
                     r["h1"] * price,
@@ -567,9 +1025,9 @@ class ExportImportPage(QWidget):
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "H4 Tại Kho"
-            _write_header(ws, ["Mã Kho", "Tên Kho", "Mã Hàng", "Tên Hàng", "ĐVT", "Số Lượng"])
+            _write_header(ws, ["Tên Kho", "Tên Hàng", "ĐVT", "Số Lượng"])
             for r in rows:
-                ws.append([r["wh_code"], r["wh_name"], r["item_code"], r["item_name"],
+                ws.append([r["wh_name"], r["item_name"],
                            r["unit_of_measure"], r["quantity"]])
             _auto_width(ws)
             wb.save(path)
@@ -613,9 +1071,9 @@ class ExportImportPage(QWidget):
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "H4"
-            _write_header(ws, ["Mã Hàng", "Tên Hàng", "ĐVT", "Tại ĐV (tháng)", "Số Lượng"])
+            _write_header(ws, ["Tên Hàng", "ĐVT", "Tại ĐV (tháng)", "Số Lượng"])
             for r in rows:
-                ws.append([r["item_code"], r["item_name"], r["unit_of_measure"],
+                ws.append([r["item_name"], r["unit_of_measure"],
                            r["months_at_unit"] or 0, r["quantity"]])
             _auto_width(ws)
             wb.save(path)
@@ -649,10 +1107,10 @@ class ExportImportPage(QWidget):
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Tổng H4 Tất Cả ĐV"
-            _write_header(ws, ["Mã ĐV", "Tên ĐV", "Mã Hàng", "Tên Hàng", "ĐVT",
+            _write_header(ws, ["Tên ĐV", "Tên Hàng", "ĐVT",
                                "Tại ĐV (tháng)", "Số Lượng"])
             for r in rows:
-                ws.append([r["wh_code"], r["wh_name"], r["item_code"], r["item_name"],
+                ws.append([r["wh_name"], r["item_name"],
                            r["unit_of_measure"], r["months_at_unit"] or 0, r["quantity"]])
             _auto_width(ws)
             wb.save(path)
@@ -693,7 +1151,7 @@ class ExportImportPage(QWidget):
         return wh_id, int(yr_str), chosen
 
     def _write_annual_rows(self, ws, rows, include_price: bool):
-        headers = ["Mã Hàng", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)"]
+        headers = ["Tên Hàng", "ĐVT", "Niên Hạn (Năm)"]
         if include_price:
             headers.append("Đơn Giá")
         headers += ["H1 Cuối Năm", "H2 Cuối Năm", "H3 Cuối Năm", "H4 Cuối Năm",
@@ -702,7 +1160,7 @@ class ExportImportPage(QWidget):
         for r in rows:
             total = r["h1_qty"] + r["h2_qty"] + r["h3_qty"] + r["h4_qty"]
             row_data = [
-                r["item_code"], r["item_name"], r["unit_of_measure"],
+                r["item_name"], r["unit_of_measure"],
                 round(r["total_lifespan_months"] / 12.0, 1),
             ]
             if include_price:
@@ -812,8 +1270,7 @@ class ExportImportPage(QWidget):
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = sheet_name
-            headers = ["Năm", "Mã Kho/ĐV", "Tên Kho/ĐV", "Mã Hàng", "Tên Hàng", "ĐVT",
-                       "Niên Hạn (Năm)"]
+            headers = ["Năm", "Tên Kho/ĐV", "Tên Hàng", "ĐVT", "Niên Hạn (Năm)"]
             if include_price:
                 headers.append("Đơn Giá")
             headers += ["H1 Cuối Năm", "H2 Cuối Năm", "H3 Cuối Năm", "H4 Cuối Năm",
@@ -822,8 +1279,8 @@ class ExportImportPage(QWidget):
             for r in rows:
                 total = r["h1_qty"] + r["h2_qty"] + r["h3_qty"] + r["h4_qty"]
                 row_data = [
-                    r["year"], r["wh_code"], r["wh_name"],
-                    r["item_code"], r["item_name"], r["unit_of_measure"],
+                    r["year"], r["wh_name"],
+                    r["item_name"], r["unit_of_measure"],
                     round(r["total_lifespan_months"] / 12.0, 1),
                 ]
                 if include_price:
@@ -877,9 +1334,9 @@ class ExportImportPage(QWidget):
                 placeholders = ",".join("?" * len(tx_type))
                 sql = f"""
                     SELECT tx.reference_number, tx.transaction_date, tx.created_by, tx.notes AS tx_notes,
-                           wf.code AS from_code, wf.name AS from_name,
-                           wt.code AS to_code,   wt.name AS to_name,
-                           t.code AS item_code,  t.name AS item_name, t.unit_of_measure,
+                           wf.name AS from_name,
+                           wt.name AS to_name,
+                           t.name AS item_name, t.unit_of_measure,
                            tl.quality_level_from, tl.quality_level_to, tl.quantity,
                            tl.lot_number, tl.notes AS line_notes
                     FROM transactions tx
@@ -894,9 +1351,9 @@ class ExportImportPage(QWidget):
             else:
                 rows = conn.execute("""
                     SELECT tx.reference_number, tx.transaction_date, tx.created_by, tx.notes AS tx_notes,
-                           wf.code AS from_code, wf.name AS from_name,
-                           wt.code AS to_code,   wt.name AS to_name,
-                           t.code AS item_code,  t.name AS item_name, t.unit_of_measure,
+                           wf.name AS from_name,
+                           wt.name AS to_name,
+                           t.name AS item_name, t.unit_of_measure,
                            tl.quality_level_from, tl.quality_level_to, tl.quantity,
                            tl.lot_number, tl.notes AS line_notes
                     FROM transactions tx
@@ -914,8 +1371,8 @@ class ExportImportPage(QWidget):
 
             _write_header(ws, [
                 "Số Phiếu", "Ngày", "Người Lập", "Ghi Chú Phiếu",
-                "Mã Kho Từ", "Tên Kho Từ", "Mã Kho Đến", "Tên Kho Đến",
-                "Mã Hàng", "Tên Hàng", "ĐVT",
+                "Tên Kho Từ", "Tên Kho Đến",
+                "Tên Hàng", "ĐVT",
                 "Mức HH Từ", "Mức HH Đến", "Số Lượng",
                 "Số Lô", "Ghi Chú Dòng",
             ])
@@ -925,9 +1382,9 @@ class ExportImportPage(QWidget):
                     r["transaction_date"] or "",
                     r["created_by"] or "",
                     r["tx_notes"] or "",
-                    r["from_code"] or "", r["from_name"] or "",
-                    r["to_code"] or "",   r["to_name"] or "",
-                    r["item_code"], r["item_name"], r["unit_of_measure"],
+                    r["from_name"] or "",
+                    r["to_name"] or "",
+                    r["item_name"], r["unit_of_measure"],
                     r["quality_level_from"] or "",
                     r["quality_level_to"],
                     r["quantity"],
@@ -1610,6 +2067,63 @@ class ExportImportPage(QWidget):
             QMessageBox.information(self, "Nhập hoàn tất", msg)
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", str(e))
+
+    # ── Backup / Restore ──────────────────────────────────────────────────────
+
+    def _backup_db(self):
+        from datetime import datetime
+        db_path = database._DB_PATH
+        default_name = f"dccd_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Lưu File Sao Lưu", default_name, "Database (*.db)"
+        )
+        if not dest:
+            return
+        try:
+            conn = database.get_conn()
+            conn.commit()
+            shutil.copy2(db_path, dest)
+            size_kb = Path(dest).stat().st_size // 1024
+            QMessageBox.information(
+                self, "Sao Lưu Thành Công",
+                f"Đã lưu database ({size_kb} KB) tại:\n{dest}\n\n"
+                "Chuyển file này sang máy khác và dùng chức năng Phục Hồi để khôi phục dữ liệu."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi Sao Lưu", str(e))
+
+    def _restore_db(self):
+        ans = QMessageBox.warning(
+            self, "Xác Nhận Phục Hồi",
+            "Toàn bộ dữ liệu hiện tại sẽ bị XÓA và thay thế bằng dữ liệu từ file sao lưu.\n\n"
+            "Bạn có chắc chắn muốn tiếp tục?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+
+        src, _ = QFileDialog.getOpenFileName(
+            self, "Chọn File Sao Lưu", "", "Database (*.db)"
+        )
+        if not src:
+            return
+        try:
+            db_path = database._DB_PATH
+            database.close()
+            shutil.copy2(src, db_path)
+            database.get_conn()
+            QMessageBox.information(
+                self, "Phục Hồi Thành Công",
+                "Đã phục hồi database thành công.\n\n"
+                "Vui lòng khởi động lại ứng dụng để tải lại toàn bộ dữ liệu."
+            )
+        except Exception as e:
+            try:
+                database.get_conn()
+            except Exception:
+                pass
+            QMessageBox.critical(self, "Lỗi Phục Hồi", str(e))
 
     def _template_item_types(self):
         if not _check_openpyxl(self):

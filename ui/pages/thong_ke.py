@@ -599,7 +599,7 @@ class ThongKePage(QWidget):
         h = self._table.horizontalHeader()
         if self._mode == "kho":
             specs = [
-                (QHeaderView.ResizeMode.Fixed, 52),
+                (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Stretch, None),
@@ -612,7 +612,7 @@ class ThongKePage(QWidget):
             ]
         elif self._mode == "don_vi":
             specs = [
-                (QHeaderView.ResizeMode.Fixed, 52),
+                (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 60),
@@ -625,7 +625,7 @@ class ThongKePage(QWidget):
             ]
         else:
             specs = [
-                (QHeaderView.ResizeMode.Fixed, 52),
+                (QHeaderView.ResizeMode.Fixed, 72),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Stretch, None),
                 (QHeaderView.ResizeMode.Fixed, 60),
@@ -1633,7 +1633,7 @@ class ThongKeSharedPage(QWidget):
         rows = self._sort_rows(rows)
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
         self._setup_cols(self._COLS_TON, [
-            (F, 36), (F, 52), (S, None), (F, 60), (F, 80), (F, 80),
+            (F, 36), (F, 72), (S, None), (F, 60), (F, 80), (F, 80),
         ], skip={0, 1})
         self._table.blockSignals(True)
         self._table.setRowCount(0)
