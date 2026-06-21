@@ -1122,6 +1122,24 @@ class ThongKeSharedPage(QWidget):
         btn_h4.setStyleSheet(_btn_style)
         btn_h4.clicked.connect(self._on_chuyen_h4)
         top.addWidget(btn_h4)
+        top.addSpacing(8)
+
+        for _label, _attr in [
+            ("Tải Mẫu",    "_btn_tai_mau"),
+            ("Xuất Excel", "_btn_xuat_xl"),
+            ("Nhập Excel", "_btn_nhap"),
+        ]:
+            _btn = QPushButton(_label)
+            _btn.setFixedHeight(34)
+            _btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
+            _btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            _btn.setStyleSheet(_EXPORT_BTN_STYLE)
+            top.addWidget(_btn)
+            top.addSpacing(8)
+            setattr(self, _attr, _btn)
+        self._btn_tai_mau.clicked.connect(self._download_template_shared)
+        self._btn_xuat_xl.clicked.connect(self._export_excel_shared)
+        self._btn_nhap.clicked.connect(self._import_excel_shared)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Tìm mặt hàng...")
@@ -1212,7 +1230,7 @@ class ThongKeSharedPage(QWidget):
         tab_h.addWidget(self._wh_combo)
         tab_h.addSpacing(8)
         tab_h.addWidget(self._search)
-        tab_h.addSpacing(8)
+        tab_h.addSpacing(4)
         tab_h.addWidget(self._vis_btn)
         self._apply_tab_style()
         root.addWidget(tab_frame)
@@ -1238,31 +1256,6 @@ class ThongKeSharedPage(QWidget):
         self._del_ton_widget.setVisible(False)
         root.addWidget(self._del_ton_widget)
 
-        # Excel buttons (chỉ hiện khi chọn kho cụ thể ở tab Tồn Kho)
-        self._excel_row_widget = QWidget()
-        self._excel_row_widget.setStyleSheet("background: transparent;")
-        excel_h = QHBoxLayout(self._excel_row_widget)
-        excel_h.setContentsMargins(0, 0, 0, 0)
-        excel_h.setSpacing(8)
-        excel_h.addStretch()
-        for _label, _attr in [
-            ("Tải Mẫu",    "_btn_tai_mau"),
-            ("Nhập Excel", "_btn_nhap"),
-            ("Xuất Excel", "_btn_xuat_xl"),
-        ]:
-            _btn = QPushButton(_label)
-            _btn.setFixedHeight(34)
-            _btn.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-            _btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            _btn.setStyleSheet(_EXPORT_BTN_STYLE)
-            excel_h.addWidget(_btn)
-            setattr(self, _attr, _btn)
-        self._btn_tai_mau.clicked.connect(self._download_template_shared)
-        self._btn_nhap.clicked.connect(self._import_excel_shared)
-        self._btn_xuat_xl.clicked.connect(self._export_excel_shared)
-        self._excel_row_widget.setVisible(False)
-        root.addWidget(self._excel_row_widget)
-        root.addSpacing(8)
 
         # table card
         tbl_card = QFrame()
@@ -1350,12 +1343,10 @@ class ThongKeSharedPage(QWidget):
         self._reload_data()
 
     def _update_excel_btns(self):
-        visible = (
-            self._active_tab == "ton"
-            and self._active_wh_id is not None
-            and self._active_wh_type == "TONG"
-        )
-        self._excel_row_widget.setVisible(visible)
+        show = (self._active_tab == "ton")
+        self._btn_tai_mau.setVisible(show)
+        self._btn_xuat_xl.setVisible(show)
+        self._btn_nhap.setVisible(show)
 
     def _on_nhap_moi(self):
         from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
@@ -1416,7 +1407,13 @@ class ThongKeSharedPage(QWidget):
 
     def _import_excel_shared(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        if not _check_openpyxl(self) or self._active_wh_id is None:
+        if not _check_openpyxl(self):
+            return
+        if self._active_wh_id is None:
+            QMessageBox.warning(
+                self, "Chưa chọn kho",
+                "Vui lòng chọn một kho cụ thể để nhập dữ liệu từ Excel."
+            )
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "Chọn File Excel", "", "Excel (*.xlsx *.xls)"
@@ -1510,14 +1507,19 @@ class ThongKeSharedPage(QWidget):
 
     def _export_excel_shared(self):
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
-        if not _check_openpyxl(self) or self._active_wh_id is None:
+        if not _check_openpyxl(self):
             return
-        wh_name = next(
-            (self._wh_combo.itemText(i)
-             for i in range(self._wh_combo.count())
-             if self._wh_combo.itemData(i) == (self._active_wh_id, "TONG")),
-            "Kho",
-        )
+        if self._active_wh_id is None:
+            wh_name = "TatCaKho"
+            sheet_title = "Hàng Dùng Chung"
+        else:
+            wh_name = next(
+                (self._wh_combo.itemText(i)
+                 for i in range(self._wh_combo.count())
+                 if self._wh_combo.itemData(i) == (self._active_wh_id, "TONG")),
+                "Kho",
+            )
+            sheet_title = wh_name[:31]
         path, _ = QFileDialog.getSaveFileName(
             self, "Xuất Excel", f"hang_dung_chung_{wh_name}.xlsx", "Excel (*.xlsx)"
         )
@@ -1527,7 +1529,7 @@ class ThongKeSharedPage(QWidget):
             import openpyxl
             wb = openpyxl.Workbook()
             ws = wb.active
-            ws.title = wh_name[:31]
+            ws.title = sheet_title
             _write_xlsx_header(ws, ["STT", "Tên hàng", "ĐVT", "H3", "H4", "Tổng"])
             rows = sorted(self._raw_ton, key=lambda r: _az_key(r["item_name"]))
             for i, r in enumerate(rows, 1):
@@ -1546,6 +1548,7 @@ class ThongKeSharedPage(QWidget):
     def refresh(self):
         self._reload_warehouses()
         self._reload_data()
+        self._update_excel_btns()
 
     def _reload_warehouses(self):
         current = self._wh_combo.currentData()

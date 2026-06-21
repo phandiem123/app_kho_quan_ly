@@ -249,12 +249,21 @@ class LineItemRow(QWidget):
             if self._quality_aware_max:
                 ql = self.combo_quality.currentText()
                 max_q = self._max_qty_map.get((it.id, ql), 0)
+                max_allowed = max_q - 1
+                if max_allowed >= 1:
+                    self.spin_qty.setRange(1, max_allowed)
+                    if self.spin_qty.value() > max_allowed:
+                        self.spin_qty.setValue(max_allowed)
+                    self.lbl_remaining.setText(f"< {max_q}")
+                else:
+                    self.spin_qty.setRange(1, 1)
+                    self.lbl_remaining.setText("Hết hàng" if max_q == 0 else f"< {max_q}")
             else:
                 max_q = self._max_qty_map.get(it.id, 0)
-            self.spin_qty.setRange(1, max(1, max_q))
-            if self.spin_qty.value() > max_q:
-                self.spin_qty.setValue(max(1, max_q))
-            self.lbl_remaining.setText(f"≤ {max_q}" if max_q else "Hết hàng")
+                self.spin_qty.setRange(1, max(1, max_q))
+                if self.spin_qty.value() > max_q:
+                    self.spin_qty.setValue(max(1, max_q))
+                self.lbl_remaining.setText(f"≤ {max_q}" if max_q else "Hết hàng")
             self.lbl_remaining.setVisible(True)
         elif it and not self._max_qty_map and hasattr(it, 'qty') and it.qty > 0:
             max_q = it.qty
@@ -305,10 +314,15 @@ class LineItemRow(QWidget):
             return
         ql = self.combo_quality.currentText()
         max_q = self._max_qty_map.get((it.id, ql), 0)
-        self.spin_qty.setRange(1, max(1, max_q))
-        if self.spin_qty.value() > max_q:
-            self.spin_qty.setValue(max(1, max_q))
-        self.lbl_remaining.setText(f"≤ {max_q}" if max_q else "Hết hàng")
+        max_allowed = max_q - 1
+        if max_allowed >= 1:
+            self.spin_qty.setRange(1, max_allowed)
+            if self.spin_qty.value() > max_allowed:
+                self.spin_qty.setValue(max_allowed)
+            self.lbl_remaining.setText(f"< {max_q}")
+        else:
+            self.spin_qty.setRange(1, 1)
+            self.lbl_remaining.setText("Hết hàng" if max_q == 0 else f"< {max_q}")
         self.lbl_remaining.setVisible(True)
 
     def update_max_qty_map(self, max_qty_map: dict):
