@@ -219,8 +219,7 @@ class LineItemRow(QWidget):
         h.addWidget(self.lbl_unit)
         h.addWidget(self.spin_qty)
         h.addWidget(self.lbl_remaining)
-        if show_quality:
-            h.addWidget(self.combo_quality)
+        h.addWidget(self.combo_quality)  # always in layout; visibility set by show_quality
         if show_price:
             h.addWidget(self.lbl_price)
             h.addWidget(self.lbl_total)
@@ -315,6 +314,15 @@ class LineItemRow(QWidget):
     def update_max_qty_map(self, max_qty_map: dict):
         self._max_qty_map = max_qty_map
         self.lbl_remaining.setVisible(bool(max_qty_map))
+        self._on_item_changed(None)
+
+    def set_quality_visible(self, visible: bool, quality_aware_max: bool = False,
+                            max_qty_map: dict | None = None):
+        self._show_quality = visible
+        self._quality_aware_max = quality_aware_max
+        if max_qty_map is not None:
+            self._max_qty_map = max_qty_map
+        self.combo_quality.setVisible(visible)
         self._on_item_changed(None)
 
     def refresh_available(self, exclude_ids: set):
@@ -596,15 +604,19 @@ class NhapKhoFormDialog(QDialog):
         col_defs = [("Mặt Hàng", 2, None), ("ĐVT", 0, 56), ("Số lượng", 0, 80)]
         if self._is_return_mode or self._subtype in ("from_unit", "shared_from_wh"):
             col_defs += [("Còn lại", 0, 66)]
-        if show_quality:
+        if show_quality or self._subtype == "shared_return":
             col_defs += [("Mức SP *", 0, 70)]
         if show_price:
             col_defs += [("Đơn Giá", 0, 130), ("Thành Tiền", 0, 120)]
         col_defs += [("Ghi chú", 1, None), ("", 0, 32)]
+        self._qual_hdr_lbl = None
         for txt, stretch, w in col_defs:
             l = QLabel(txt)
             l.setFont(QFont(FONT, 10))
             l.setStyleSheet("color: #999;")
+            if txt == "Mức SP *" and self._subtype == "shared_return":
+                l.setVisible(False)
+                self._qual_hdr_lbl = l
             if w:
                 l.setFixedWidth(w)
                 ch.addWidget(l)
@@ -762,6 +774,10 @@ class NhapKhoFormDialog(QDialog):
             self._lbl_wh_src.setVisible(is_wh)
             self.f_src_wh.setVisible(is_wh)
         self._update_source_toggle_style()
+        # Show/hide quality column when switching to/from "Từ Kho" source
+        self._show_quality = is_wh
+        if self._qual_hdr_lbl:
+            self._qual_hdr_lbl.setVisible(is_wh)
         if not self._editing:
             self._clear_rows()
             if is_wh:
@@ -917,7 +933,10 @@ class NhapKhoFormDialog(QDialog):
             item_types = self._loan_item_types_filtered
         else:
             item_types = self._item_types
-        is_shared_from_wh = (self._subtype == "shared_from_wh")
+        is_shared_from_wh = (
+            self._subtype == "shared_from_wh" or
+            (self._subtype == "shared_return" and self._shared_source == "warehouse")
+        )
         if is_shared_from_wh:
             max_map = self._loan_max_qty_map
         elif self._is_return_mode and self._loan_max_qty_map:
