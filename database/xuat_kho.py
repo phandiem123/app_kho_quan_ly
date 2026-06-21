@@ -201,29 +201,36 @@ def get_loan_items_remaining(
 
 
 def get_unit_loan_items_remaining(
-    unit_wh_id: int, tong_wh_id: int, exclude_receipt_id: int | None = None
+    unit_wh_id: int, tong_wh_id: int | None = None, exclude_receipt_id: int | None = None
 ) -> list[dict]:
-    """Items and still-returnable quantities for all MUON transactions from a unit."""
+    """Items and still-returnable quantities for all MUON transactions from a unit.
+
+    If tong_wh_id is None, queries across all TONG warehouses (used for shared_return
+    when destination warehouse hasn't been selected yet).
+    """
     conn = database.get_conn()
-    loaned = conn.execute("""
+    wh_cond = "AND t.from_warehouse_id = ?" if tong_wh_id else ""
+    loaned_params: list = [unit_wh_id] + ([tong_wh_id] if tong_wh_id else [])
+    loaned = conn.execute(f"""
         SELECT tl.item_type_id, it.name AS item_name, it.code AS item_code,
                it.unit_of_measure, SUM(tl.quantity) AS loaned_qty
         FROM transactions t
         JOIN transaction_lines tl ON tl.transaction_id = t.id
         JOIN item_types it ON it.id = tl.item_type_id
-        WHERE t.type = 'MUON' AND t.to_warehouse_id = ? AND t.from_warehouse_id = ?
+        WHERE t.type = 'MUON' AND t.to_warehouse_id = ? {wh_cond}
         GROUP BY tl.item_type_id
-    """, (unit_wh_id, tong_wh_id)).fetchall()
+    """, loaned_params).fetchall()
 
     excl = " AND t.id != ?" if exclude_receipt_id else ""
-    params: list = [unit_wh_id, tong_wh_id] + ([exclude_receipt_id] if exclude_receipt_id else [])
+    ret_wh_cond = "AND t.to_warehouse_id = ?" if tong_wh_id else ""
+    returned_params: list = [unit_wh_id] + ([tong_wh_id] if tong_wh_id else []) + ([exclude_receipt_id] if exclude_receipt_id else [])
     returned = conn.execute(f"""
         SELECT tl.item_type_id, SUM(tl.quantity) AS qty
         FROM transactions t
         JOIN transaction_lines tl ON tl.transaction_id = t.id
-        WHERE t.type = 'TRA' AND t.from_warehouse_id = ? AND t.to_warehouse_id = ?{excl}
+        WHERE t.type = 'TRA' AND t.from_warehouse_id = ? {ret_wh_cond}{excl}
         GROUP BY tl.item_type_id
-    """, params).fetchall()
+    """, returned_params).fetchall()
     ret_map = {r["item_type_id"]: r["qty"] for r in returned}
 
     result = []
@@ -477,6 +484,39 @@ def delete(issue_id: int) -> None:
     conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (issue_id,))
     conn.execute("DELETE FROM transactions WHERE id=?", (issue_id,))
     conn.commit()
+
+
+def get_by_id(tx_id: int) -> "Issue | None":
+    conn = database.get_conn()
+    row = conn.execute("""
+        SELECT t.id, t.type AS tx_type, t.reference_number,
+               t.from_warehouse_id, wfrom.name AS from_warehouse_name,
+               t.to_warehouse_id,   wto.name   AS to_warehouse_name,
+               t.transaction_date, t.supplier AS recipient,
+               t.created_by, t.transporter, t.notes
+        FROM transactions t
+        LEFT JOIN warehouses wfrom ON wfrom.id = t.from_warehouse_id
+        LEFT JOIN warehouses wto   ON wto.id   = t.to_warehouse_id
+        WHERE t.id = ?
+    """, (tx_id,)).fetchone()
+    if row is None:
+        return None
+    issue = Issue(
+        id=row["id"],
+        tx_type=row["tx_type"],
+        reference_number=row["reference_number"] or "",
+        from_warehouse_id=row["from_warehouse_id"] or 0,
+        from_warehouse_name=row["from_warehouse_name"] or "",
+        to_warehouse_id=row["to_warehouse_id"],
+        to_warehouse_name=row["to_warehouse_name"] or "",
+        transaction_date=row["transaction_date"] or "",
+        recipient=row["recipient"] or "",
+        created_by=row["created_by"] or "",
+        transporter=row["transporter"] or "",
+        notes=row["notes"] or "",
+    )
+    issue.lines = get_lines(tx_id)
+    return issue
 
 
 def ref_exists(ref: str, exclude_id: int | None = None) -> bool:

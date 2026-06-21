@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     type                TEXT NOT NULL CHECK (type IN (
                             'NHAP_KHO', 'XUAT_KHO',
+                            'NHAP_DC_TU_KHO',
                             'LUAN_CHUYEN_KHO', 'LUAN_CHUYEN_DV',
                             'NANG_MUC', 'CHUYEN_H4',
                             'MUON', 'TRA',

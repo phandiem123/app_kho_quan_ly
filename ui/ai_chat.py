@@ -88,6 +88,10 @@ class _OllamaWorker(QThread):
                 "model": self._model,
                 "messages": self._messages,
                 "stream": True,
+                "options": {
+                    "num_ctx": 2048,
+                    "num_predict": 512,
+                },
             }).encode()
             req = urllib.request.Request(
                 f"{OLLAMA_URL}/api/chat",
@@ -174,7 +178,7 @@ class AIChatDialog(QDialog):
         self._messages: list[dict] = []
         self._worker: _OllamaWorker | None = None
         self._cur_bubble: _Bubble | None = None
-        self._model = "llama3.2"
+        self._model = "llama3.2:1b"
         self._context = ""
 
         self._build_ui()
@@ -206,7 +210,7 @@ class AIChatDialog(QDialog):
         self._mdl_combo.setFixedWidth(150)
         self._mdl_combo.setEditable(True)
         self._mdl_combo.addItems([
-            "llama3.2", "llama3.1", "llama3.2:1b",
+            "llama3.2:1b", "llama3.2", "llama3.1",
             "mistral", "qwen2.5", "gemma2",
         ])
         self._mdl_combo.setStyleSheet("""

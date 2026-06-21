@@ -498,6 +498,8 @@ class NhapKhoFormDialog(QDialog):
             col_b.addRow(lbl("Đơn Vị Trả *"), self.f_from_wh)
         elif self._subtype == "event_return":
             col_b.addRow(lbl("Tên Sự Kiện *"), self.f_event_combo)
+        elif self._subtype == "shared_from_wh":
+            col_b.addRow(lbl("Kho Nguồn *"), self.f_src_wh)
         elif self._subtype == "shared_return":
             tgl_w = QWidget()
             tgl_w.setFixedHeight(32)
@@ -671,9 +673,16 @@ class NhapKhoFormDialog(QDialog):
         # Also connect warehouse-to combo (affects unit remaining lookup)
         if self._subtype == "unit_return":
             self.f_wh.currentIndexChanged.connect(self._on_unit_combo_changed)
+        elif self._subtype == "shared_return":
+            self.f_wh.currentIndexChanged.connect(
+                lambda _: self._reload_return_items() if self._shared_source == "unit_return" else None
+            )
         # from_unit: lọc mặt hàng theo đơn vị được chọn
         if self._subtype == "from_unit":
             self.f_from_wh.currentIndexChanged.connect(self._on_from_unit_changed)
+        # shared_from_wh: load items from selected source warehouse
+        if self._subtype == "shared_from_wh":
+            self.f_src_wh.currentIndexChanged.connect(self._reload_wh_items)
 
         if receipt:
             self._fill(receipt)
@@ -803,9 +812,9 @@ class NhapKhoFormDialog(QDialog):
                 return []
             else:
                 unit_wh_id = self.f_from_wh.currentData()
-                tong_wh_id = self.f_wh.currentData()
-                if not unit_wh_id or not tong_wh_id:
+                if not unit_wh_id:
                     return []
+                tong_wh_id = self.f_wh.currentData()
                 return get_unit_loan_items_remaining(unit_wh_id, tong_wh_id)
         return []
 
@@ -940,6 +949,8 @@ class NhapKhoFormDialog(QDialog):
                 _set_combo_by_data(self.f_event_combo, receipt.loan_transaction_id)
                 self._loan_tx_id = receipt.loan_transaction_id
             self._load_edit_loan_data(receipt)
+        elif self._subtype == "shared_from_wh":
+            _set_combo_by_data(self.f_src_wh, receipt.from_warehouse_id)
         else:
             _set_combo_by_data(self.f_from_wh, receipt.from_warehouse_id)
         self.f_person.setText(receipt.created_by)
@@ -1038,6 +1049,10 @@ class NhapKhoFormDialog(QDialog):
                     self._err("Vui lòng chọn Sự Kiện."); return None
                 combo_text = self.f_event_combo.currentText()
                 supplier = combo_text.split("  (")[0] if "  (" in combo_text else combo_text
+        elif self._subtype == "shared_from_wh":
+            from_wh_id = self.f_src_wh.currentData()
+            if not from_wh_id:
+                self._err("Vui lòng chọn Kho Nguồn."); return None
         else:
             from_wh_id = self.f_from_wh.currentData()
             if not from_wh_id:
@@ -1087,6 +1102,8 @@ class NhapKhoFormDialog(QDialog):
                 receipt.tx_type = "NHAP_DC_TU_KHO"
             else:
                 receipt.tx_type = "TRA"
+        elif self._subtype == "shared_from_wh":
+            receipt.tx_type = "NHAP_DC_TU_KHO"
 
         if self._subtype == "from_unit" and not nhap_lines:
             # DC-only: bỏ qua NHAP_KHO, tạo TRA cho DC rồi trả receipt giả

@@ -362,7 +362,7 @@ class XuatKhoFormDialog(QDialog):
         show_quality = True
         self._show_price = show_price
         self._show_quality = show_quality
-        self._quality_levels = ("H1", "H2", "H3", "H4") if self._subtype == "to_unit" else ("H1", "H2", "H3")
+        self._quality_levels = ("H1", "H2", "H3", "H4") if self._subtype == "to_unit" else ("H3",)
         self._shared_dest = "unit"
         self._regular_item_types: list = []   # hàng thường có tồn tại kho được chọn
         self._shared_item_types: list = []

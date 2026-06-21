@@ -39,6 +39,59 @@ def _migrate():
         except Exception:
             pass
     _conn.commit()
+    _migrate_nhap_dc_tu_kho()
+
+
+def _migrate_nhap_dc_tu_kho():
+    """Add NHAP_DC_TU_KHO to transactions.type CHECK constraint for existing databases."""
+    row = _conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='transactions'"
+    ).fetchone()
+    if not row or 'NHAP_DC_TU_KHO' in (row[0] or ''):
+        return  # Already has it or table doesn't exist
+
+    _conn.execute("PRAGMA foreign_keys = OFF")
+    _conn.execute("""
+        CREATE TABLE transactions_new (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            type                TEXT NOT NULL CHECK (type IN (
+                                    'NHAP_KHO', 'XUAT_KHO',
+                                    'NHAP_DC_TU_KHO',
+                                    'LUAN_CHUYEN_KHO', 'LUAN_CHUYEN_DV',
+                                    'NANG_MUC', 'CHUYEN_H4',
+                                    'MUON', 'TRA',
+                                    'THANH_XU_LY'
+                                )),
+            reference_number    TEXT,
+            from_warehouse_id   INTEGER REFERENCES warehouses(id),
+            to_warehouse_id     INTEGER REFERENCES warehouses(id),
+            transaction_date    TEXT NOT NULL,
+            notes               TEXT,
+            created_by          TEXT,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            supplier            TEXT,
+            transporter         TEXT,
+            loan_transaction_id INTEGER REFERENCES transactions_new(id)
+        )
+    """)
+    _conn.execute("""
+        INSERT INTO transactions_new
+            (id, type, reference_number, from_warehouse_id, to_warehouse_id,
+             transaction_date, notes, created_by, created_at,
+             supplier, transporter, loan_transaction_id)
+        SELECT id, type, reference_number, from_warehouse_id, to_warehouse_id,
+               transaction_date, notes, created_by, created_at,
+               supplier, transporter, loan_transaction_id
+        FROM transactions
+    """)
+    _conn.execute("DROP TABLE transactions")
+    _conn.execute("ALTER TABLE transactions_new RENAME TO transactions")
+    _conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_date    ON transactions(transaction_date)")
+    _conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_type    ON transactions(type)")
+    _conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_from_wh ON transactions(from_warehouse_id)")
+    _conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_to_wh   ON transactions(to_warehouse_id)")
+    _conn.execute("PRAGMA foreign_keys = ON")
+    _conn.commit()
 
 
 def close():

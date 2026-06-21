@@ -936,8 +936,7 @@ class ThongKeSharedPage(QWidget):
     """Hàng dùng chung – tồn kho (H1–H3), đang cho mượn, chờ thanh xử lý (H4)."""
 
     _COLS_TON   = ["", "STT", "Tên Hàng", "ĐVT", "H3", "H4"]
-    _COLS_MUON  = ["STT", "Số Phiếu", "Ngày Mượn", "Tên Hàng",
-                   "ĐVT", "Số Lượng", "Đơn Vị / Người Mượn"]
+    _COLS_MUON  = ["STT", "Số Phiếu", "Ngày Mượn", "Đơn Vị / Người Mượn", "Tên Hàng", "Số M.Hàng", ""]
     _COLS_H4    = ["STT", "Số Phiếu", "Ngày", "Kho", "Số M.Hàng", ""]
 
     _TABS = [
@@ -956,10 +955,9 @@ class ThongKeSharedPage(QWidget):
         "muon": {
             1: lambda r: (r["reference_number"] or "").lower(),
             2: lambda r: r["transaction_date"] or "",
-            3: lambda r: (r["item_name"] or "").lower(),
-            4: lambda r: (r["unit_of_measure"] or "").lower(),
-            5: lambda r: r["quantity"],
-            6: lambda r: (r["borrower"] or "").lower(),
+            3: lambda r: (r["borrower"] or "").lower(),
+            4: lambda r: (r["item_names"] or "").lower(),
+            5: lambda r: r["line_count"],
         },
         "phieu_h4": {
             1: lambda r: (r["reference_number"] or "").lower(),
@@ -1266,7 +1264,7 @@ class ThongKeSharedPage(QWidget):
 
     def _on_nhap_moi(self):
         from ui.dialogs.nhap_kho_form import NhapKhoFormDialog
-        dlg = NhapKhoFormDialog(self, subtype="shared_new")
+        dlg = NhapKhoFormDialog(self, subtype="shared_from_wh")
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
@@ -1509,12 +1507,14 @@ class ThongKeSharedPage(QWidget):
             p_ton = [wh_id] if wh_id else []
             self._raw_ton = conn.execute(f"""
                 SELECT t.id AS item_type_id, t.name AS item_name, t.unit_of_measure,
-                       SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END) AS h3,
-                       SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END) AS h4
-                FROM inventory i
-                JOIN item_types t ON t.id = i.item_type_id
-                WHERE i.is_shared=1 AND i.quality_level IN ('H3','H4') {inv_f}
-                GROUP BY t.id HAVING (h3 + h4) > 0 ORDER BY t.name
+                       COALESCE(SUM(CASE WHEN i.quality_level='H3' THEN i.quantity ELSE 0 END), 0) AS h3,
+                       COALESCE(SUM(CASE WHEN i.quality_level='H4' THEN i.quantity ELSE 0 END), 0) AS h4
+                FROM item_types t
+                LEFT JOIN inventory i ON i.item_type_id = t.id
+                    AND i.is_shared=1 {inv_f}
+                WHERE t.is_active = 1
+                GROUP BY t.id
+                ORDER BY t.name
             """, p_ton).fetchall()
 
         # Tab 2: Đang cho mượn
@@ -1526,16 +1526,18 @@ class ThongKeSharedPage(QWidget):
         else:
             muon_f, p_muon = "", []
         self._raw_muon = conn.execute(f"""
-            SELECT tx.transaction_date, tx.reference_number,
-                   t.name AS item_name, t.unit_of_measure,
-                   tl.quantity,
-                   COALESCE(wto.name, tx.supplier, '') AS borrower
+            SELECT tx.id, tx.transaction_date, tx.reference_number,
+                   COALESCE(wto.name, tx.supplier, '') AS borrower,
+                   COUNT(tl.id) AS line_count,
+                   COALESCE(SUM(tl.quantity), 0) AS total_quantity,
+                   GROUP_CONCAT(it.name, ', ') AS item_names
             FROM transactions tx
             JOIN transaction_lines tl ON tl.transaction_id = tx.id
-            JOIN item_types t ON t.id = tl.item_type_id
+            JOIN item_types it ON it.id = tl.item_type_id
             LEFT JOIN warehouses wto ON wto.id = tx.to_warehouse_id
             WHERE tx.type='MUON' {muon_f}
-            ORDER BY tx.transaction_date DESC, tx.id DESC, tl.id
+            GROUP BY tx.id
+            ORDER BY tx.transaction_date DESC, tx.id DESC
         """, p_muon).fetchall()
 
         # Tab 3: Phiếu chuyển H4 (chỉ lọc khi chọn kho TONG cụ thể)
@@ -1557,7 +1559,7 @@ class ThongKeSharedPage(QWidget):
 
         h3_total = sum(r["h3"] for r in self._raw_ton)
         h4_total = sum(r["h4"] for r in self._raw_ton)
-        muon     = sum(r["quantity"] for r in self._raw_muon)
+        muon     = sum(r["total_quantity"] for r in self._raw_muon)
         self._cards["muon"].set_value(str(muon))
         self._cards["san_sang"].set_value(str(h3_total))
         self._cards["txl"].set_value(str(h4_total))
@@ -1575,7 +1577,8 @@ class ThongKeSharedPage(QWidget):
                     if not q
                     or q in (r["reference_number"] or "").lower()
                     or q in (r["borrower"] or "").lower()
-                    or q in (r["transaction_date"] or "")]
+                    or q in (r["transaction_date"] or "")
+                    or q in (r["item_names"] or "").lower()]
             self._load_muon(rows)
         else:
             q = self._search.text().strip().lower()
@@ -1721,10 +1724,10 @@ class ThongKeSharedPage(QWidget):
     def _load_muon(self, rows):
         rows = self._sort_rows(rows)
         F, S = QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch
+        n = len(self._COLS_MUON)
         self._setup_cols(self._COLS_MUON, [
-            (F, 52), (F, 110), (F, 110), (S, None),
-            (F, 60), (F, 88), (S, None),
-        ])
+            (F, 52), (F, 130), (F, 110), (F, 160), (S, None), (F, 90), (F, 44),
+        ], skip={0, n - 1})
         self._table.setRowCount(0)
         for i, r in enumerate(rows):
             ri = self._table.rowCount()
@@ -1734,12 +1737,25 @@ class ThongKeSharedPage(QWidget):
                 (str(i + 1),                         True),
                 (r["reference_number"] or "—",       True),
                 (r["transaction_date"],              True),
-                (r["item_name"],                     False),
-                (r["unit_of_measure"],               True),
-                (str(r["quantity"]),                 True),
                 (r["borrower"] or "—",               False),
+                (r["item_names"] or "—",             False),
+                (str(r["line_count"]),               True),
             ]):
                 self._table.setItem(ri, c, self._mk(*args))
+
+            tx_id = r["id"]
+            btn = QPushButton("•••")
+            btn.setFlat(True)
+            btn.setFont(QFont(FONT, 14))
+            btn.setFixedSize(40, 40)
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn.setStyleSheet("""
+                QPushButton { color: #111; border: none; background: transparent;
+                    letter-spacing: 2px; border-radius: 6px; }
+                QPushButton:hover { background: #f0f0f0; color: #555; }
+            """)
+            btn.clicked.connect(lambda _, tid=tx_id, b=btn: self._show_muon_menu(tid, b))
+            self._table.setCellWidget(ri, n - 1, btn)
 
     def _load_phieu_h4(self, rows):
         rows = self._sort_rows(rows)
@@ -1814,16 +1830,28 @@ class ThongKeSharedPage(QWidget):
         self._expanded_h4_row = row
 
     def _on_table_context_menu(self, pos):
-        if self._active_tab != "phieu_h4":
-            return
         row = self._table.rowAt(pos.y())
-        if row < 0 or row % 2 == 1:
+        if row < 0:
             return
-        data_idx = row // 2
-        if data_idx >= len(self._h4_rows_order):
-            return
-        tx_id = self._h4_rows_order[data_idx]["id"]
-        self._show_phieu_h4_menu(tx_id, None)
+        if self._active_tab == "phieu_h4":
+            if row % 2 == 1:
+                return
+            data_idx = row // 2
+            if data_idx >= len(self._h4_rows_order):
+                return
+            tx_id = self._h4_rows_order[data_idx]["id"]
+            self._show_phieu_h4_menu(tx_id, None)
+        elif self._active_tab == "muon":
+            q = self._muon_search.text().strip().lower()
+            visible = [r for r in self._raw_muon
+                       if not q
+                       or q in (r["reference_number"] or "").lower()
+                       or q in (r["borrower"] or "").lower()
+                       or q in (r["transaction_date"] or "")]
+            visible = self._sort_rows(visible)
+            if row >= len(visible):
+                return
+            self._show_muon_menu(visible[row]["id"], None)
 
     def _show_phieu_h4_menu(self, tx_id: int, anchor):
         menu = QMenu(self)
@@ -1890,6 +1918,60 @@ class ThongKeSharedPage(QWidget):
         conn.execute("DELETE FROM transaction_lines WHERE transaction_id=?", (tx_id,))
         conn.execute("DELETE FROM transactions WHERE id=?", (tx_id,))
         conn.commit()
+        self.refresh()
+
+    # ── Đang Cho Mượn: sửa / xóa ─────────────────────────────────────────────
+
+    def _show_muon_menu(self, tx_id: int, anchor):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background: white; border: 1px solid #e0e0e0;
+                border-radius: 8px; padding: 4px; }
+            QMenu::item { padding: 8px 20px; border-radius: 5px;
+                font-size: 12px; color: #111; }
+            QMenu::item:selected { background: #f5f5f5; }
+        """)
+        act_edit = QAction("Sửa", self)
+        act_del  = QAction("Xóa", self)
+        menu.addAction(act_edit)
+        menu.addSeparator()
+        menu.addAction(act_del)
+        if anchor:
+            pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
+        else:
+            pos = QCursor.pos()
+        act = menu.exec(pos)
+        if act == act_edit:
+            self._edit_muon(tx_id)
+        elif act == act_del:
+            self._delete_muon(tx_id)
+
+    def _edit_muon(self, tx_id: int):
+        from database.xuat_kho import get_by_id
+        from ui.dialogs.xuat_kho_form import XuatKhoFormDialog
+        issue = get_by_id(tx_id)
+        if issue is None:
+            return
+        dlg = XuatKhoFormDialog(self, issue=issue)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _delete_muon(self, tx_id: int):
+        from PyQt6.QtWidgets import QMessageBox
+        from database.xuat_kho import delete as xk_delete
+        conn = database.get_conn()
+        tx = conn.execute(
+            "SELECT reference_number FROM transactions WHERE id=?", (tx_id,)
+        ).fetchone()
+        ref = (tx["reference_number"] or f"#{tx_id}") if tx else f"#{tx_id}"
+        reply = QMessageBox.question(
+            self, "Xác nhận xóa",
+            f"Xóa phiếu cho mượn '{ref}'?\nTồn kho dùng chung sẽ được hoàn lại.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        xk_delete(tx_id)
         self.refresh()
 
 
